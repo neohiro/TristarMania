@@ -1,5 +1,5 @@
-# TristarMania
-Tristar Mania - an addictive python game (Linux/Windows)
+# Tristar Mania
+An addictive python game (Linux/Windows)
 
 - GREEN TRIANGLE = NEUTRAL SHIP
 - RED SQUARE = ENEMY VESSEL
