@@ -220,7 +220,8 @@ class EnemySpaceship:
         self.y = random.randrange(-300, -50) # Start off-screen at a random x
         # Increase speed based on level
         self.base_speed = random.uniform(1.5, 3.5)
-        self.speed_multiplier = 1 + (level - 1) * 0.2
+        capped_level = min(level, 2)
+        self.speed_multiplier = 1 + (capped_level - 1) * 0.2
         self.speed = self.base_speed * self.speed_multiplier
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -245,7 +246,7 @@ class EnemySpaceship:
         if level < 3:
             return False
         # Fire a laser every 1.5 seconds at level 3, faster at higher levels
-        shoot_cooldown = 1500 - (level - 3) * 50
+        shoot_cooldown = (1500 - (level - 3) * 50) * 2
         return current_time - self.last_shot_time > max(500, shoot_cooldown)
 
     def shoot(self, player_pos):
