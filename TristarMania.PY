@@ -100,6 +100,33 @@ class Explosion:
         for p in self.particles:
             p.draw(screen)
 
+# --- Harvest Particle Class (New) ---
+class HarvestParticle:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.speed = random.uniform(2, 4)
+        self.size = random.randint(2, 4)
+        self.lifespan = 180 # Longer lifespan to reach the player
+        self.rect = pygame.Rect(self.x, self.y, self.size * 2, self.size * 2)
+
+    def update(self, player_pos):
+        # Calculate vector to the player
+        dx = player_pos[0] - self.x
+        dy = player_pos[1] - self.y
+        dist = math.hypot(dx, dy)
+
+        if dist > 0:
+            self.x += self.speed * (dx / dist)
+            self.y += self.speed * (dy / dist)
+
+        self.lifespan -= 1
+        self.rect.center = (int(self.x), int(self.y))
+        
+    def draw(self, screen):
+        # Draw a white circle
+        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.size)
+        
 # --- Spaceship Class (Player) ---
 class Spaceship:
     def __init__(self, screen_width, screen_height):
@@ -108,6 +135,7 @@ class Spaceship:
         self.velocity = 0
         self.max_velocity = 5
         self.acceleration = 0.2
+        self.deceleration = 0.1 # New deceleration rate
         self.rotation_speed = 3
         self.direction = -90 # Start facing up, in degrees
         self.screen_width = screen_width
@@ -133,7 +161,11 @@ class Spaceship:
     
     # Method to stop the ship completely
     def stop(self):
-        self.velocity = 0
+        # Gradual deceleration
+        if self.velocity > 0:
+            self.velocity = max(0, self.velocity - self.deceleration)
+        elif self.velocity < 0:
+            self.velocity = min(0, self.velocity + self.deceleration)
 
     def rotate_left(self):
         self.direction -= self.rotation_speed
@@ -366,6 +398,25 @@ class Game:
             amplitude = 18000 * (1 - (i / duration_samples))
             sample = amplitude * math.sin(2 * math.pi * current_freq * i / SAMPLE_RATE)
             level_up_sound_list.append(int(sample))
+        # Harvest sound: A short, high-pitched "ding"
+        harvest_sound_list = []
+        duration_samples = int(SAMPLE_RATE * 0.1) # 0.1 seconds
+        for i in range(duration_samples):
+            freq = 1500 + 500 * (i / duration_samples) # Rising pitch
+            amplitude = 10000 * math.sin(math.pi * (i / duration_samples)) # Fades in and out
+            sample = amplitude * math.sin(2 * math.pi * freq * i / SAMPLE_RATE)
+            harvest_sound_list.append(int(sample))
+        
+        # Hurt sound: A longer, more clear sine wave
+        hurt_sound_list = []
+        duration_samples = int(SAMPLE_RATE * 0.4) # 0.4 seconds
+        frequency = 150 # Low frequency for a "thump"
+        amplitude_envelope = 1.0 # Start at full volume
+        for i in range(duration_samples):
+            # A decaying sine wave
+            amplitude_envelope = max(0, 1 - (i / duration_samples))
+            sample = 15000 * amplitude_envelope * math.sin(2 * math.pi * frequency * i / SAMPLE_RATE)
+            hurt_sound_list.append(int(sample))
 
 
         # Convert the lists to a NumPy array with the correct data type (signed 16-bit integers)
@@ -374,20 +425,25 @@ class Game:
         menu_click_sound_1d = np.array(menu_click_sound_list, dtype=np.int16)
         explosion_sound_1d = np.array(explosion_sound_list, dtype=np.int16)
         level_up_sound_1d = np.array(level_up_sound_list, dtype=np.int16)
+        harvest_sound_1d = np.array(harvest_sound_list, dtype=np.int16)
+        hurt_sound_1d = np.array(hurt_sound_list, dtype=np.int16)
 
         laser_sound_data = np.column_stack((laser_sound_1d, laser_sound_1d))
         menu_click_sound_data = np.column_stack((menu_click_sound_1d, menu_click_sound_1d))
         explosion_sound_data = np.column_stack((explosion_sound_1d, explosion_sound_1d))
         level_up_sound_data = np.column_stack((level_up_sound_1d, level_up_sound_1d))
-
+        harvest_sound_data = np.column_stack((harvest_sound_1d, harvest_sound_1d))
+        hurt_sound_data = np.column_stack((hurt_sound_1d, hurt_sound_1d))
         
         self.laser_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(laser_sound_data))
         self.explosion_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(explosion_sound_data))
         self.menu_click_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(menu_click_sound_data))
         self.level_up_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(level_up_sound_data))
+        self.harvest_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(harvest_sound_data))
+        self.hurt_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(hurt_sound_data))
 
         # List of all sounds to easily manage volume
-        self.all_sounds = [self.laser_sound, self.explosion_sound, self.menu_click_sound, self.level_up_sound]
+        self.all_sounds = [self.laser_sound, self.explosion_sound, self.menu_click_sound, self.level_up_sound, self.harvest_sound, self.hurt_sound]
         self.update_volumes()
 
     def update_volumes(self):
@@ -514,6 +570,7 @@ class Game:
             self.clock.tick(self.FPS)
 
     def video_settings_menu(self):
+        pygame.mouse.set_visible(True) # Show cursor
         video_items = ["Fullscreen: ", "Resolution: ", "Back"]
         item_spacing = 100
         
@@ -567,6 +624,7 @@ class Game:
         return text_surface, text_rect
 
     def audio_settings_menu(self):
+        pygame.mouse.set_visible(True) # Show cursor
         item_spacing = 100
         start_y = self.SCREEN_HEIGHT // 2 - (2 * item_spacing) // 2
 
@@ -618,6 +676,7 @@ class Game:
             self.clock.tick(self.FPS)
             
     def controls_settings_menu(self):
+        pygame.mouse.set_visible(True) # Show cursor
         item_spacing = 100
         
         running = True
@@ -702,7 +761,8 @@ class Game:
             self.clock.tick(self.FPS)
             
     def main_menu(self):
-        menu_items = ["New Game", "Load Game", "Options", "Exit"]
+        pygame.mouse.set_visible(True) # Show cursor
+        menu_items = ["New Game", "Load Game", "Leaderboards", "Options", "Exit"]
         item_spacing = 100
         
         running = True
@@ -718,6 +778,9 @@ class Game:
                     elif load_game_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
                         self.load_game_menu()
+                    elif leaderboard_rect.collidepoint(event.pos):
+                        self.menu_click_sound.play()
+                        self.leaderboard_menu()
                     elif options_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
                         self.options_menu()
@@ -726,19 +789,49 @@ class Game:
                         sys.exit()
 
             self.animate_background()
-            start_y = self.SCREEN_HEIGHT // 2 - (len(menu_items) * item_spacing) // 2
             
-            self.draw_text("Main Menu", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, start_y - 100)
-
-            _, new_game_rect = self.draw_and_get_rect("New Game", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, start_y)
-            _, load_game_rect = self.draw_and_get_rect("Load Game", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, start_y + item_spacing)
-            _, options_rect = self.draw_and_get_rect("Options", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, start_y + 2 * item_spacing)
-            _, exit_rect = self.draw_and_get_rect("Exit", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, start_y + 3 * item_spacing)
+            # Draw the title and main menu text
+            self.draw_text("Tristar Mania", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 250)
+            self.draw_text("Main Menu", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 150)
+            
+            # Start the menu items further down to prevent overlap
+            menu_start_y = self.SCREEN_HEIGHT // 2
+            
+            _, new_game_rect = self.draw_and_get_rect("New Game", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y)
+            _, load_game_rect = self.draw_and_get_rect("Load Game", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y + item_spacing)
+            _, leaderboard_rect = self.draw_and_get_rect("Leaderboards", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y + 2 * item_spacing)
+            _, options_rect = self.draw_and_get_rect("Options", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y + 3 * item_spacing)
+            _, exit_rect = self.draw_and_get_rect("Exit", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y + 4 * item_spacing)
             
             pygame.display.flip()
             self.clock.tick(self.FPS)
 
-    
+    def leaderboard_menu(self):
+        """Displays the temporary leaderboard."""
+        pygame.mouse.set_visible(True) # Show cursor
+        
+        running = True
+        while running:
+            self.animate_background()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if back_rect.collidepoint(event.pos):
+                        self.menu_click_sound.play()
+                        return # Exit the leaderboard menu
+
+            self.draw_text("LEADERBOARD", self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 200)
+
+            # Draw the leaderboard
+            for i, score in enumerate(self.high_scores):
+                self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100 + i * 40)
+            
+            _, back_rect = self.draw_and_get_rect("Back", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT - 100)
+            
+            pygame.display.flip()
+            self.clock.tick(self.FPS)
     
     def level_to_code(self, level):
         """Encodes a level number into a 4-letter code using base-26 + offset."""
@@ -772,6 +865,7 @@ class Game:
     
     def save_game_screen(self, level):
         """Displays the save code for the current level."""
+        pygame.mouse.set_visible(True) # Show cursor
         save_code = self.level_to_code(level)
         
         running = True
@@ -798,6 +892,7 @@ class Game:
 
     def load_game_menu(self):
         """Handles the text input for the load code."""
+        pygame.mouse.set_visible(True) # Show cursor
         input_text = ""
         input_box_rect = pygame.Rect(self.SCREEN_WIDTH // 2 - 150, self.SCREEN_HEIGHT // 2 - 25, 300, 50)
         
@@ -838,6 +933,7 @@ class Game:
 
     def game_over_screen(self, final_score):
         """Displays the game over screen with the temporary leaderboard."""
+        pygame.mouse.set_visible(True) # Show cursor
         self.high_scores.append(final_score)
         self.high_scores.sort(reverse=True)
         # Keep only the top 5 scores
@@ -893,8 +989,10 @@ class Game:
         neutrals = []
         player_lasers = []
         enemy_lasers = []
+        harvest_particles = [] # New list for the harvest particles
 
         # Initial flight animation phase
+        pygame.mouse.set_visible(False) # Hide cursor during gameplay
         while spaceship.y > self.SCREEN_HEIGHT / 3:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -927,6 +1025,7 @@ class Game:
                 event = e
             
             if not is_paused:
+                pygame.mouse.set_visible(False)
                 # Handle spaceship movement
                 keys = pygame.key.get_pressed()
                 if keys[self.keybinds["Move Up"]] or keys[pygame.K_UP]:
@@ -934,7 +1033,7 @@ class Game:
                 elif keys[self.keybinds["Move Down"]] or keys[pygame.K_DOWN]:
                     spaceship.move_backward()
                 else:
-                    spaceship.stop() # Stop the spaceship if no forward/backward key is pressed
+                    spaceship.stop() # Now this call handles the gradual slowdown
 
                 if keys[self.keybinds["Move Left"]] or keys[pygame.K_LEFT]:
                     spaceship.rotate_left()
@@ -975,7 +1074,11 @@ class Game:
                 for explosion in self.explosions:
                     explosion.update()
                 self.explosions = [exp for exp in self.explosions if not exp.is_done]
-
+                
+                # Update harvest particles
+                for particle in harvest_particles:
+                    particle.update((spaceship.x, spaceship.y))
+                harvest_particles = [p for p in harvest_particles if p.lifespan > 0]
             
             self.animate_background()
             
@@ -995,6 +1098,10 @@ class Game:
             # Draw explosions on top
             for explosion in self.explosions:
                 explosion.draw(self.screen)
+            
+            # Draw harvest particles on top
+            for particle in harvest_particles:
+                particle.draw(self.screen)
 
 
             # Check for collisions only when not paused
@@ -1002,7 +1109,7 @@ class Game:
                 # Check for collisions between player and obstacles
                 for rock in rocks[:]:
                     if spaceship.check_collision(rock.rect):
-                        self.explosion_sound.play()
+                        self.hurt_sound.play() # Play hurt sound on collision
                         self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
                         lives -= 1
                         rocks.remove(rock)
@@ -1013,7 +1120,7 @@ class Game:
                             return # End the game loop
                 for enemy in enemies[:]:
                     if spaceship.check_collision(enemy.rect):
-                        self.explosion_sound.play()
+                        self.hurt_sound.play() # Play hurt sound on collision
                         self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
                         lives -= 1
                         enemies.remove(enemy)
@@ -1033,6 +1140,12 @@ class Game:
                             score += rock.score_value
                             player_lasers.remove(laser)
                             rocks.remove(rock)
+                            # Spawn harvest particles if it's a "life rock"
+                            if rock.is_life_rock:
+                                self.harvest_sound.play() # Play the harvest sound
+                                num_particles = 10
+                                for _ in range(num_particles):
+                                    harvest_particles.append(HarvestParticle(rock.rect.centerx, rock.rect.centery))
                             if lives < 4:
                                 lives += 1
                             collided = True
@@ -1056,6 +1169,7 @@ class Game:
                             self.explosions.append(Explosion(neutral.rect.centerx, neutral.rect.centery))
                             player_lasers.remove(laser)
                             neutrals.remove(neutral)
+                            self.hurt_sound.play() # Play hurt sound for hitting a neutral ship
                             lives -= 1
                             if lives <= 0:
                                 self.game_over_screen(score)
@@ -1065,7 +1179,7 @@ class Game:
                 # Check for collisions between enemy lasers and player
                 for laser in enemy_lasers[:]:
                     if spaceship.check_collision(laser.rect):
-                        self.explosion_sound.play()
+                        self.hurt_sound.play() # Play hurt sound on hit
                         self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
                         lives -= 1
                         enemy_lasers.remove(laser)
@@ -1073,6 +1187,12 @@ class Game:
                             self.game_over_screen(score)
                             return
                         break
+                        
+                # Check for collisions between player and harvest particles
+                for particle in harvest_particles[:]:
+                    if spaceship.check_collision(particle.rect):
+                        score += 5 # Small score bonus for harvesting a particle
+                        harvest_particles.remove(particle)
 
                 # Update the level based on score
                 level = int(score / 500) + 1
@@ -1085,6 +1205,7 @@ class Game:
                 enemies = [enemy for enemy in enemies if not enemy.is_off_screen()]
                 player_lasers = [laser for laser in player_lasers if not laser.is_off_screen()]
                 enemy_lasers = [laser for laser in enemy_lasers if not laser.is_off_screen()]
+                # Harvest particles are removed by their lifespan
 
             # Draw score and level on the left side
             self.draw_text(f"Score: {score}", self.score_font, WHITE, self.screen, 15, 15, center=False)
@@ -1094,6 +1215,7 @@ class Game:
             self.draw_lifebar(lives)
 
             if is_paused:
+                pygame.mouse.set_visible(True) # Show cursor in pause menu
                 resume_game, load_game, exit_game, save_game = self.draw_pause_menu(event)
                 if resume_game:
                     is_paused = False
