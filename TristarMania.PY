@@ -338,6 +338,76 @@ class NeutralSpaceship:
     def is_off_screen(self):
         return False
 
+# --- Boss Class (New) ---
+class Boss:
+    def __init__(self, screen_width, screen_height, level):
+        self.size = 100
+        self.x = screen_width / 2
+        self.y = -self.size
+        self.speed = 0.5 # Slower speed
+        self.max_health = 10 + (level - 4) * 10 # More aggressive HP scaling
+        self.health = self.max_health
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.rect = pygame.Rect(self.x - self.size / 2, self.y - self.size / 2, self.size, self.size)
+        self.is_destroyed = False
+        self.score_value = 0 # Boss grants no points
+        self.last_shot_time = pygame.time.get_ticks()
+
+    def update(self, player_pos):
+        # Move towards the player, like other enemies
+        dx = player_pos[0] - self.x
+        dy = player_pos[1] - self.y
+        dist = math.hypot(dx, dy)
+        
+        if dist != 0:
+            self.x += self.speed * (dx / dist)
+            self.y += self.speed * (dy / dist)
+            
+        self.rect.center = (int(self.x), int(self.y))
+
+    def can_shoot(self, current_time, level):
+        # Boss starts shooting at level 5 (its second appearance)
+        if level < 5:
+            return False
+        # Cooldown decreases as level increases, making it fire faster
+        shoot_cooldown = max(500, 2000 - (level - 5) * 100)
+        return current_time - self.last_shot_time > shoot_cooldown
+
+    def shoot(self, player_pos):
+        # Calculate the direction to the player
+        dx = player_pos[0] - self.x
+        dy = player_pos[1] - self.y
+        angle = math.degrees(math.atan2(dy, dx))
+        
+        # Create a new laser from the boss's position
+        new_laser = Laser(self.x, self.y, angle, self.screen_width, self.screen_height, is_enemy_laser=True)
+        self.last_shot_time = pygame.time.get_ticks()
+        return new_laser
+
+    def draw(self, screen):
+        # Draw the boss square
+        pygame.draw.rect(screen, ENEMY_COLOR, self.rect)
+        # Draw the health bar
+        if self.health > 0:
+            # Health bar background
+            bg_rect = pygame.Rect(self.rect.left, self.rect.top - 20, self.rect.width, 10)
+            pygame.draw.rect(screen, DARK_BLUE, bg_rect)
+            # Health bar foreground
+            health_percentage = self.health / self.max_health
+            fg_rect = pygame.Rect(self.rect.left, self.rect.top - 20, self.rect.width * health_percentage, 10)
+            pygame.draw.rect(screen, LIFE_COLOR, fg_rect)
+            # Health bar outline
+            pygame.draw.rect(screen, WHITE, bg_rect, 1)
+
+    def take_damage(self, amount):
+        self.health -= amount
+        if self.health <= 0:
+            self.is_destroyed = True
+
+    def is_off_screen(self):
+        return self.y > self.screen_height + self.size
+
 # --- Main Game Class ---
 class Game:
     def __init__(self):
@@ -351,7 +421,7 @@ class Game:
         self.FPS = FPS
 
         self.screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), pygame.FULLSCREEN if self.FULLSCREEN else 0)
-        pygame.display.set_caption("Game Menu")
+        pygame.display.set_caption("Tristar Mania")
 
         self.font = pygame.font.Font(None, 74)
         self.menu_font = pygame.font.Font(None, 60)
@@ -378,6 +448,7 @@ class Game:
         self.remapping_key_for = None
         
         self.explosions = []
+        self.music_is_playing = False # Flag to manage music state
 
         # --- Sound Effects ---
         # Generate the sound data as a list of integers
@@ -418,7 +489,6 @@ class Game:
             sample = 15000 * amplitude_envelope * math.sin(2 * math.pi * frequency * i / SAMPLE_RATE)
             hurt_sound_list.append(int(sample))
 
-
         # Convert the lists to a NumPy array with the correct data type (signed 16-bit integers)
         # The mixer requires a 2-dimensional array for stereo sound, so we use column_stack to create two identical channels.
         laser_sound_1d = np.array(laser_sound_list, dtype=np.int16)
@@ -442,9 +512,33 @@ class Game:
         self.harvest_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(harvest_sound_data))
         self.hurt_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(hurt_sound_data))
 
+        # --- Background Music ---
+        note_duration = int(SAMPLE_RATE * 0.5) # Each note is 0.5 seconds long
+        frequencies = [65.41, 49.00, 58.27, 43.65] # Frequencies for C2, G1, A#1, F1
+        music_sound_list = []
+        for freq in frequencies:
+            for i in range(note_duration):
+                amplitude = 12000 * (1 - (i / note_duration)) # Decay envelope
+                sample = amplitude * math.sin(2 * math.pi * freq * i / SAMPLE_RATE)
+                music_sound_list.append(int(sample))
+        music_sound_1d = np.array(music_sound_list, dtype=np.int16)
+        music_sound_data = np.column_stack((music_sound_1d, music_sound_1d))
+        self.background_music = pygame.mixer.Sound(pygame.sndarray.make_sound(music_sound_data))
+
         # List of all sounds to easily manage volume
-        self.all_sounds = [self.laser_sound, self.explosion_sound, self.menu_click_sound, self.level_up_sound, self.harvest_sound, self.hurt_sound]
+        self.all_sounds = [self.laser_sound, self.explosion_sound, self.menu_click_sound, self.level_up_sound, self.harvest_sound, self.hurt_sound, self.background_music]
         self.update_volumes()
+
+    def play_background_music(self):
+        """Plays the background music on a loop if it's not already playing."""
+        if not self.music_is_playing:
+            self.background_music.play(loops=-1)
+            self.music_is_playing = True
+
+    def stop_background_music(self):
+        """Stops the background music."""
+        self.background_music.stop()
+        self.music_is_playing = False
 
     def update_volumes(self):
         """Sets the volume for all sound effects based on the self.volume attribute."""
@@ -767,6 +861,8 @@ class Game:
         
         running = True
         while running:
+            self.play_background_music() # Ensure music is playing in the menu
+            
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
@@ -939,7 +1035,12 @@ class Game:
         # Keep only the top 5 scores
         self.high_scores = self.high_scores[:5]
         
-        final_level = int(final_score / 500) + 1
+        # Calculate level based on the new incremental formula
+        if final_score < 0: final_score = 0
+        # Formula to find level L from score S: 25L^2 + 425L - (450 + S) = 0
+        # Using the quadratic formula solution for L
+        final_level = int((-425 + math.sqrt(225625 + 100 * final_score)) / 50)
+        
         save_code = self.level_to_code(final_level)
 
         running = True
@@ -973,23 +1074,30 @@ class Game:
         Starts the game with a flight animation.
         start_level: The level to begin at.
         """
+        self.stop_background_music() # Stop menu music when game starts
+        
         spaceship = Spaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT)
         is_paused = False
         frame_counter = 0
         
-        # Set initial score and level based on start_level
+        # Set initial score and level based on start_level and new progression
         level = start_level
-        previous_level = level
-        score = (start_level - 1) * 500
+        # Total score S to reach level L: S(L) = (L-1) * (450 + 25L)
+        score = int((start_level - 1) * (450 + 25 * start_level)) if start_level > 1 else 0
+        # Score required for next level (L+1): S(L+1) = L * (475 + 25L)
+        score_for_next_level = int(level * (475 + 25 * level))
+
         lives = 4 # Start with 4 lives
+        boss_spawned_this_level = False # New flag for boss spawning
 
         # Lists for obstacles and lasers
         rocks = []
         enemies = []
         neutrals = []
+        bosses = [] # New list for bosses
         player_lasers = []
         enemy_lasers = []
-        harvest_particles = [] # New list for the harvest particles
+        harvest_particles = []
 
         # Initial flight animation phase
         pygame.mouse.set_visible(False) # Hide cursor during gameplay
@@ -1033,7 +1141,7 @@ class Game:
                 elif keys[self.keybinds["Move Down"]] or keys[pygame.K_DOWN]:
                     spaceship.move_backward()
                 else:
-                    spaceship.stop() # Now this call handles the gradual slowdown
+                    spaceship.stop()
 
                 if keys[self.keybinds["Move Left"]] or keys[pygame.K_LEFT]:
                     spaceship.rotate_left()
@@ -1052,19 +1160,28 @@ class Game:
                         enemies.append(EnemySpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level))
                     elif obstacle_type == "neutral":
                         neutrals.append(NeutralSpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
+                
+                # Spawn boss if conditions are met
+                if level >= 4 and not boss_spawned_this_level and not bosses:
+                    bosses.append(Boss(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level))
+                    boss_spawned_this_level = True
+
 
                 # Update and draw obstacles and lasers
                 for rock in rocks:
                     rock.update()
                 for enemy in enemies:
-                    # Pass the player's position and current level to the enemy's update method
                     enemy.update((spaceship.x, spaceship.y), level)
-                    # Enemy firing logic
                     if enemy.can_shoot(pygame.time.get_ticks(), level):
                         self.laser_sound.play()
                         enemy_lasers.append(enemy.shoot((spaceship.x, spaceship.y)))
                 for neutral in neutrals:
                     neutral.update()
+                for boss in bosses:
+                    boss.update((spaceship.x, spaceship.y))
+                    if boss.can_shoot(pygame.time.get_ticks(), level):
+                        self.laser_sound.play()
+                        enemy_lasers.append(boss.shoot((spaceship.x, spaceship.y)))
                 for laser in player_lasers:
                     laser.update()
                 for laser in enemy_lasers:
@@ -1090,6 +1207,8 @@ class Game:
                 enemy.draw(self.screen)
             for neutral in neutrals:
                 neutral.draw(self.screen)
+            for boss in bosses: # Draw boss
+                boss.draw(self.screen)
             for laser in player_lasers:
                 laser.draw(self.screen)
             for laser in enemy_lasers:
@@ -1109,29 +1228,40 @@ class Game:
                 # Check for collisions between player and obstacles
                 for rock in rocks[:]:
                     if spaceship.check_collision(rock.rect):
-                        self.hurt_sound.play() # Play hurt sound on collision
+                        self.hurt_sound.play()
                         self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
                         lives -= 1
                         rocks.remove(rock)
-                        spaceship.x = self.SCREEN_WIDTH / 2 # Reset player position
+                        spaceship.x = self.SCREEN_WIDTH / 2
                         spaceship.y = self.SCREEN_HEIGHT / 2
                         if lives <= 0:
                             self.game_over_screen(score)
-                            return # End the game loop
+                            return
                 for enemy in enemies[:]:
                     if spaceship.check_collision(enemy.rect):
-                        self.hurt_sound.play() # Play hurt sound on collision
+                        self.hurt_sound.play()
                         self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
                         lives -= 1
                         enemies.remove(enemy)
-                        spaceship.x = self.SCREEN_WIDTH / 2 # Reset player position
+                        spaceship.x = self.SCREEN_WIDTH / 2
                         spaceship.y = self.SCREEN_HEIGHT / 2
                         if lives <= 0:
                             self.game_over_screen(score)
-                            return # End the game loop
-                
+                            return
+                for boss in bosses[:]:
+                    if spaceship.check_collision(boss.rect):
+                        self.hurt_sound.play()
+                        self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
+                        lives -= 2  # Boss collision is more punishing
+                        if lives <= 0:
+                            self.game_over_screen(score)
+                            return
+                        # Reset player position after hitting boss
+                        spaceship.x = self.SCREEN_WIDTH / 2
+                        spaceship.y = self.SCREEN_HEIGHT / 2
+
                 # Check for collisions between player's lasers and obstacles
-                for laser in player_lasers[:]: # Iterate over a copy to safely remove items
+                for laser in player_lasers[:]:
                     collided = False
                     for rock in rocks[:]:
                         if laser.rect.colliderect(rock.rect):
@@ -1140,11 +1270,9 @@ class Game:
                             score += rock.score_value
                             player_lasers.remove(laser)
                             rocks.remove(rock)
-                            # Spawn harvest particles if it's a "life rock"
                             if rock.is_life_rock:
-                                self.harvest_sound.play() # Play the harvest sound
-                                num_particles = 10
-                                for _ in range(num_particles):
+                                self.harvest_sound.play()
+                                for _ in range(10):
                                     harvest_particles.append(HarvestParticle(rock.rect.centerx, rock.rect.centery))
                             if lives < 4:
                                 lives += 1
@@ -1169,17 +1297,31 @@ class Game:
                             self.explosions.append(Explosion(neutral.rect.centerx, neutral.rect.centery))
                             player_lasers.remove(laser)
                             neutrals.remove(neutral)
-                            self.hurt_sound.play() # Play hurt sound for hitting a neutral ship
+                            self.hurt_sound.play()
                             lives -= 1
                             if lives <= 0:
                                 self.game_over_screen(score)
                                 return
                             break
+                    if collided: continue
+
+                    for boss in bosses[:]:
+                        if laser.rect.colliderect(boss.rect):
+                            player_lasers.remove(laser)
+                            boss.take_damage(1)
+                            if boss.is_destroyed:
+                                self.explosion_sound.play()
+                                # Bigger explosion for the boss
+                                self.explosions.append(Explosion(boss.rect.centerx, boss.rect.centery, num_particles=100))
+                                score += boss.score_value # This will now add 0
+                                bosses.remove(boss)
+                            collided = True
+                            break
                 
                 # Check for collisions between enemy lasers and player
                 for laser in enemy_lasers[:]:
                     if spaceship.check_collision(laser.rect):
-                        self.hurt_sound.play() # Play hurt sound on hit
+                        self.hurt_sound.play()
                         self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
                         lives -= 1
                         enemy_lasers.remove(laser)
@@ -1191,21 +1333,23 @@ class Game:
                 # Check for collisions between player and harvest particles
                 for particle in harvest_particles[:]:
                     if spaceship.check_collision(particle.rect):
-                        score += 5 # Small score bonus for harvesting a particle
+                        score += 5
                         harvest_particles.remove(particle)
 
-                # Update the level based on score
-                level = int(score / 500) + 1
-                if level > previous_level:
+                # Update the level based on the new incremental score requirement
+                if score >= score_for_next_level:
+                    level += 1
                     self.level_up_sound.play()
-                previous_level = level
+                    boss_spawned_this_level = False
+                    # Calculate the score required for the *new* next level
+                    score_for_next_level = int(level * (475 + 25 * level))
 
                 # Remove off-screen objects
                 rocks = [rock for rock in rocks if not rock.is_off_screen()]
                 enemies = [enemy for enemy in enemies if not enemy.is_off_screen()]
+                bosses = [boss for boss in bosses if not boss.is_off_screen()] # Remove off-screen boss
                 player_lasers = [laser for laser in player_lasers if not laser.is_off_screen()]
                 enemy_lasers = [laser for laser in enemy_lasers if not laser.is_off_screen()]
-                # Harvest particles are removed by their lifespan
 
             # Draw score and level on the left side
             self.draw_text(f"Score: {score}", self.score_font, WHITE, self.screen, 15, 15, center=False)
@@ -1215,18 +1359,18 @@ class Game:
             self.draw_lifebar(lives)
 
             if is_paused:
-                pygame.mouse.set_visible(True) # Show cursor in pause menu
+                pygame.mouse.set_visible(True)
                 resume_game, load_game, exit_game, save_game = self.draw_pause_menu(event)
                 if resume_game:
                     is_paused = False
                 elif save_game:
                     self.save_game_screen(level)
-                    is_paused = True # Stay in pause menu after saving
+                    is_paused = True
                 elif load_game:
                     self.load_game_menu()
                     return
                 elif exit_game:
-                    return # Exit the game loop and return to main menu
+                    return
 
             pygame.display.flip()
             self.clock.tick(self.FPS)
