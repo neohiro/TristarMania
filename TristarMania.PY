@@ -142,6 +142,11 @@ class Spaceship:
         self.screen_height = screen_height
         self.size = 20
         self.rect = pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
+        # Invulnerability attributes
+        self.invulnerable = False
+        self.invulnerability_duration = 180 # 3 seconds at 60 FPS
+        self.invulnerability_timer = 0
+        self.blink = False
         
     def update(self):
         self.x += self.velocity * math.cos(math.radians(self.direction))
@@ -152,6 +157,19 @@ class Spaceship:
         self.y %= self.screen_height
         
         self.rect.center = (int(self.x), int(self.y))
+
+        # Handle invulnerability
+        if self.invulnerable:
+            self.invulnerability_timer -= 1
+            # Blink every 10 frames
+            if self.invulnerability_timer % 10 < 5:
+                self.blink = True
+            else:
+                self.blink = False
+
+            if self.invulnerability_timer <= 0:
+                self.invulnerable = False
+                self.blink = False
         
     def move_forward(self):
         self.velocity = min(self.max_velocity, self.velocity + self.acceleration)
@@ -174,6 +192,9 @@ class Spaceship:
         self.direction += self.rotation_speed
         
     def draw(self, screen):
+        if self.blink:
+            return # Don't draw if blinking
+
         angle_rad = math.radians(self.direction)
         
         # Tip of the spaceship
@@ -194,19 +215,38 @@ class Spaceship:
     def check_collision(self, other_rect):
         return self.rect.colliderect(other_rect)
 
+    def respawn(self):
+        self.x = self.screen_width / 2
+        self.y = self.screen_height / 2
+        self.velocity = 0
+        self.invulnerable = True
+        self.invulnerability_timer = self.invulnerability_duration
+
 # --- Laser Class ---
 class Laser:
-    def __init__(self, x, y, direction, screen_width, screen_height, is_enemy_laser=False):
+    def __init__(self, x, y, direction, screen_width, screen_height, is_enemy_laser=False, level=1):
         self.x = x
         self.y = y
         self.direction = direction
-        # Set a slower speed for enemy lasers
-        self.speed = 5 if is_enemy_laser else 10
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.is_enemy_laser = is_enemy_laser
-        self.color = ENEMY_COLOR if is_enemy_laser else LASER_COLOR
-        self.rect = pygame.Rect(self.x, self.y, 5, 15)
+
+        if is_enemy_laser:
+            # Enemy laser properties
+            self.speed = 5
+            self.color = ENEMY_COLOR
+            width, height = 5, 15
+        else:
+            # Player laser properties
+            self.speed = 10
+            self.color = LASER_COLOR
+            # Increase width based on level, with a maximum cap
+            base_width = 5
+            width = min(base_width + (level // 2), 25)
+            height = 15
+        
+        self.rect = pygame.Rect(self.x, self.y, width, height)
         
     def update(self):
         # Move the laser forward
@@ -345,7 +385,7 @@ class Boss:
         self.x = screen_width / 2
         self.y = -self.size
         self.speed = 0.5 # Slower speed
-        self.max_health = 10 + (level - 4) * 10 # More aggressive HP scaling
+        self.max_health = (10 + (level - 4) * 10) * 2 # More aggressive HP scaling
         self.health = self.max_health
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -556,16 +596,15 @@ class Game:
         surface.blit(textobj, textrect)
         return textobj, textrect
 
-    def draw_lifebar(self, current_lives):
+    def draw_lifebar(self, current_lives, max_lives):
         bar_width = 30
         bar_height = 15
         bar_spacing = 10
-        total_width = (bar_width + bar_spacing) * 4 - bar_spacing
         
-        start_x = 15 # Start on the left side, same as score
-        start_y = 100
+        start_x = 15
+        start_y = 15
         
-        for i in range(4):
+        for i in range(max_lives):
             bar_rect = pygame.Rect(start_x + i * (bar_width + bar_spacing), start_y, bar_width, bar_height)
             color = LIFE_COLOR if i < current_lives else DARK_BLUE
             pygame.draw.rect(self.screen, color, bar_rect)
@@ -1088,6 +1127,7 @@ class Game:
         score_for_next_level = int(level * (475 + 25 * level))
 
         lives = 4 # Start with 4 lives
+        max_lives = 4 # Track maximum lives
         boss_spawned_this_level = False # New flag for boss spawning
 
         # Lists for obstacles and lasers
@@ -1127,8 +1167,8 @@ class Game:
                         is_paused = not is_paused
                     if not is_paused and e.key == self.keybinds["Shoot"]:
                         self.laser_sound.play()
-                        # Create a new laser from the spaceship's position and direction
-                        new_laser = Laser(spaceship.x, spaceship.y, spaceship.direction, self.SCREEN_WIDTH, self.SCREEN_HEIGHT)
+                        # Create a new laser from the spaceship's position and direction, passing the current level
+                        new_laser = Laser(spaceship.x, spaceship.y, spaceship.direction, self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level=level)
                         player_lasers.append(new_laser)
                 event = e
             
@@ -1225,40 +1265,60 @@ class Game:
 
             # Check for collisions only when not paused
             if not is_paused:
-                # Check for collisions between player and obstacles
-                for rock in rocks[:]:
-                    if spaceship.check_collision(rock.rect):
-                        self.hurt_sound.play()
-                        self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
-                        lives -= 1
-                        rocks.remove(rock)
-                        spaceship.x = self.SCREEN_WIDTH / 2
-                        spaceship.y = self.SCREEN_HEIGHT / 2
+                # Check for collisions that destroy the player
+                if not spaceship.invulnerable:
+                    player_collided_physically = False
+                    # Player vs Rocks
+                    for rock in rocks[:]:
+                        if spaceship.check_collision(rock.rect):
+                            self.hurt_sound.play()
+                            self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
+                            lives -= 1
+                            rocks.remove(rock)
+                            player_collided_physically = True
+                            break
+                    # Player vs Enemies
+                    if not player_collided_physically:
+                        for enemy in enemies[:]:
+                            if spaceship.check_collision(enemy.rect):
+                                self.hurt_sound.play()
+                                self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
+                                lives -= 1
+                                enemies.remove(enemy)
+                                player_collided_physically = True
+                                break
+                    # Player vs Boss
+                    if not player_collided_physically:
+                        for boss in bosses[:]:
+                            if spaceship.check_collision(boss.rect):
+                                self.hurt_sound.play()
+                                self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
+                                lives -= 2  # Boss collision is more punishing
+                                player_collided_physically = True
+                                break # Only one boss, but good practice
+                    
+                    # If a physical collision happened, respawn the ship
+                    if player_collided_physically:
                         if lives <= 0:
                             self.game_over_screen(score)
                             return
-                for enemy in enemies[:]:
-                    if spaceship.check_collision(enemy.rect):
-                        self.hurt_sound.play()
-                        self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
-                        lives -= 1
-                        enemies.remove(enemy)
-                        spaceship.x = self.SCREEN_WIDTH / 2
-                        spaceship.y = self.SCREEN_HEIGHT / 2
-                        if lives <= 0:
-                            self.game_over_screen(score)
-                            return
-                for boss in bosses[:]:
-                    if spaceship.check_collision(boss.rect):
-                        self.hurt_sound.play()
-                        self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
-                        lives -= 2  # Boss collision is more punishing
-                        if lives <= 0:
-                            self.game_over_screen(score)
-                            return
-                        # Reset player position after hitting boss
-                        spaceship.x = self.SCREEN_WIDTH / 2
-                        spaceship.y = self.SCREEN_HEIGHT / 2
+                        else:
+                            spaceship.respawn()
+                    
+                    # Player vs Enemy Lasers (handled separately, does not trigger respawn)
+                    # This check happens only if the ship isn't invulnerable from a recent respawn
+                    if not spaceship.invulnerable:
+                        for laser in enemy_lasers[:]:
+                            if spaceship.check_collision(laser.rect):
+                                self.hurt_sound.play()
+                                self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
+                                lives -= 1
+                                enemy_lasers.remove(laser)
+                                if lives <= 0:
+                                    self.game_over_screen(score)
+                                    return
+                                # No respawn, no invulnerability for laser hits
+                                break # Process one laser hit per frame
 
                 # Check for collisions between player's lasers and obstacles
                 for laser in player_lasers[:]:
@@ -1274,7 +1334,7 @@ class Game:
                                 self.harvest_sound.play()
                                 for _ in range(10):
                                     harvest_particles.append(HarvestParticle(rock.rect.centerx, rock.rect.centery))
-                            if lives < 4:
+                            if lives < max_lives:
                                 lives += 1
                             collided = True
                             break
@@ -1317,18 +1377,6 @@ class Game:
                                 bosses.remove(boss)
                             collided = True
                             break
-                
-                # Check for collisions between enemy lasers and player
-                for laser in enemy_lasers[:]:
-                    if spaceship.check_collision(laser.rect):
-                        self.hurt_sound.play()
-                        self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
-                        lives -= 1
-                        enemy_lasers.remove(laser)
-                        if lives <= 0:
-                            self.game_over_screen(score)
-                            return
-                        break
                         
                 # Check for collisions between player and harvest particles
                 for particle in harvest_particles[:]:
@@ -1340,6 +1388,8 @@ class Game:
                 if score >= score_for_next_level:
                     level += 1
                     self.level_up_sound.play()
+                    max_lives += 1
+                    lives += 1
                     boss_spawned_this_level = False
                     # Calculate the score required for the *new* next level
                     score_for_next_level = int(level * (475 + 25 * level))
@@ -1351,12 +1401,12 @@ class Game:
                 player_lasers = [laser for laser in player_lasers if not laser.is_off_screen()]
                 enemy_lasers = [laser for laser in enemy_lasers if not laser.is_off_screen()]
 
-            # Draw score and level on the left side
-            self.draw_text(f"Score: {score}", self.score_font, WHITE, self.screen, 15, 15, center=False)
-            self.draw_text(f"Level: {level}", self.score_font, WHITE, self.screen, 15, 60, center=False)
-            
             # Draw the lifebar
-            self.draw_lifebar(lives)
+            self.draw_lifebar(lives, max_lives)
+            
+            # Draw score and level on the left side
+            self.draw_text(f"Score: {score}", self.score_font, WHITE, self.screen, 15, 60, center=False)
+            self.draw_text(f"Level: {level}", self.score_font, WHITE, self.screen, 15, 105, center=False)
 
             if is_paused:
                 pygame.mouse.set_visible(True)
