@@ -448,6 +448,60 @@ class Boss:
     def is_off_screen(self):
         return self.y > self.screen_height + self.size
 
+# --- Black Hole Class (New) ---
+class BlackHole:
+    def __init__(self, screen_width, screen_height):
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        
+        self.radius = 40  # The event horizon radius
+        self.gravity_radius = 300 # The area of effect
+        self.strength = 200 # How strongly it pulls objects
+
+        self.direction = random.choice([-1, 1])
+        if self.direction == 1: # Left to right
+            self.x = -self.radius
+        else: # Right to left
+            self.x = self.screen_width + self.radius
+        
+        self.y = random.randrange(self.radius, self.screen_height - self.radius)
+        self.speed = 1.5
+        self.is_active = True
+        self.rect = pygame.Rect(self.x - self.radius, self.y - self.radius, self.radius * 2, self.radius * 2)
+
+    def update(self):
+        self.x += self.speed * self.direction
+        self.rect.center = (int(self.x), int(self.y))
+        
+        # Deactivate if it moves off-screen
+        if (self.direction == 1 and self.x > self.screen_width + self.radius * 2) or \
+           (self.direction == -1 and self.x < -self.radius * 2):
+            self.is_active = False
+
+    def draw(self, screen):
+        # Draw a semi-transparent gravity well effect
+        gravity_surface = pygame.Surface((self.gravity_radius * 2, self.gravity_radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(gravity_surface, (50, 0, 80, 80), (self.gravity_radius, self.gravity_radius), self.gravity_radius)
+        screen.blit(gravity_surface, (self.x - self.gravity_radius, self.y - self.gravity_radius))
+        
+        # Draw the black event horizon
+        pygame.draw.circle(screen, (0, 0, 0), (int(self.x), int(self.y)), self.radius)
+
+    def attract(self, obj):
+        # Calculate vector to the black hole
+        dx = self.x - obj.x
+        dy = self.y - obj.y
+        dist = math.hypot(dx, dy)
+
+        # Check if the object is within the gravity well but outside the event horizon
+        if self.radius < dist < self.gravity_radius:
+            # Calculate pull force (stronger closer to the center)
+            pull_force = self.strength / (dist * 2)
+            
+            # Apply the force to the object's coordinates
+            obj.x += pull_force * (dx / dist)
+            obj.y += pull_force * (dy / dist)
+
 # --- Main Game Class ---
 class Game:
     def __init__(self):
@@ -1126,8 +1180,11 @@ class Game:
         # Score required for next level (L+1): S(L+1) = L * (475 + 25L)
         score_for_next_level = int(level * (475 + 25 * level))
 
-        lives = 4 # Start with 4 lives
-        max_lives = 4 # Track maximum lives
+        # Calculate lives based on the starting level
+        # Start with 4 lives at level 1, and gain 1 for each subsequent level.
+        initial_lives = 4 + (start_level - 1)
+        lives = initial_lives
+        max_lives = initial_lives
         boss_spawned_this_level = False # New flag for boss spawning
 
         # Lists for obstacles and lasers
@@ -1138,6 +1195,11 @@ class Game:
         player_lasers = []
         enemy_lasers = []
         harvest_particles = []
+        
+        # Black Hole state
+        black_hole = None
+        # Spawn first black hole between 20 and 40 seconds
+        black_hole_timer = random.randint(20 * self.FPS, 40 * self.FPS)
 
         # Initial flight animation phase
         pygame.mouse.set_visible(False) # Hide cursor during gameplay
@@ -1188,6 +1250,26 @@ class Game:
                 if keys[self.keybinds["Move Right"]] or keys[pygame.K_RIGHT]:
                     spaceship.rotate_right()
                 
+                # --- Update Game State ---
+                
+                # Handle black hole spawning
+                black_hole_timer -= 1
+                if not bosses and black_hole is None and black_hole_timer <= 0:
+                    black_hole = BlackHole(self.SCREEN_WIDTH, self.SCREEN_HEIGHT)
+                    # Set timer for the next one (30-60 seconds)
+                    black_hole_timer = random.randint(30 * self.FPS, 60 * self.FPS)
+
+                # Update black hole and apply its gravity effect
+                if black_hole:
+                    black_hole.update()
+                    if not black_hole.is_active:
+                        black_hole = None
+                    else:
+                        # Attract all relevant game objects
+                        all_attractable_objects = [spaceship] + rocks + enemies + neutrals + bosses + player_lasers + enemy_lasers + harvest_particles
+                        for obj in all_attractable_objects:
+                            black_hole.attract(obj)
+
                 spaceship.update()
 
                 # Spawn obstacles periodically
@@ -1239,6 +1321,10 @@ class Game:
             
             self.animate_background()
             
+            # Draw black hole first so other objects are on top
+            if black_hole:
+                black_hole.draw(self.screen)
+            
             # Draw all objects
             spaceship.draw(self.screen)
             for rock in rocks:
@@ -1265,6 +1351,27 @@ class Game:
 
             # Check for collisions only when not paused
             if not is_paused:
+                # --- Black Hole Consumption ---
+                if black_hole:
+                    # Check objects getting sucked in
+                    collections_to_check = [rocks, enemies, neutrals, player_lasers, enemy_lasers, harvest_particles]
+                    for collection in collections_to_check:
+                        for item in collection[:]:
+                            if math.hypot(item.x - black_hole.x, item.y - black_hole.y) < black_hole.radius:
+                                self.explosions.append(Explosion(item.x, item.y, num_particles=5))
+                                collection.remove(item)
+
+                    # Check player getting sucked in
+                    if not spaceship.invulnerable and math.hypot(spaceship.x - black_hole.x, spaceship.y - black_hole.y) < black_hole.radius:
+                        self.hurt_sound.play()
+                        self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
+                        lives -= 1
+                        if lives <= 0:
+                            self.game_over_screen(score)
+                            return
+                        else:
+                            spaceship.respawn()
+                
                 # Check for collisions that destroy the player
                 if not spaceship.invulnerable:
                     player_collided_physically = False
