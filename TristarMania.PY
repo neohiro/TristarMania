@@ -450,13 +450,13 @@ class Boss:
 
 # --- Black Hole Class (New) ---
 class BlackHole:
-    def __init__(self, screen_width, screen_height):
+    def __init__(self, screen_width, screen_height, level):
         self.screen_width = screen_width
         self.screen_height = screen_height
         
         self.radius = 40  # The event horizon radius
         self.gravity_radius = 300 # The area of effect
-        self.strength = 200 # How strongly it pulls objects
+        self.strength = 200 + (level * 15) # How strongly it pulls objects
 
         self.direction = random.choice([-1, 1])
         if self.direction == 1: # Left to right
@@ -1255,7 +1255,7 @@ class Game:
                 # Handle black hole spawning
                 black_hole_timer -= 1
                 if not bosses and black_hole is None and black_hole_timer <= 0:
-                    black_hole = BlackHole(self.SCREEN_WIDTH, self.SCREEN_HEIGHT)
+                    black_hole = BlackHole(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level)
                     # Set timer for the next one (30-60 seconds)
                     black_hole_timer = random.randint(30 * self.FPS, 60 * self.FPS)
 
