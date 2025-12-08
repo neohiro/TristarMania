@@ -2,6 +2,8 @@ import pygame
 import sys
 import random
 import math
+import os
+from datetime import datetime
 import numpy as np # Import the NumPy library
 
 # --- Constants ---
@@ -40,6 +42,30 @@ def sinc(x):
         return 1.0
     else:
         return math.sin(x) / x
+
+# --- Parallax Star Class (New) ---
+class ParallaxStar:
+    def __init__(self, screen_width, screen_height):
+        self.x = random.randrange(0, screen_width)
+        self.y = random.randrange(0, screen_height)
+        self.size = random.randint(1, 2) # Smaller, faint stars
+        # Dim colors for background depth
+        self.color = (random.randint(40, 80), random.randint(40, 80), random.randint(80, 120)) 
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.parallax_factor = random.uniform(0.1, 0.3) # Move slower than foreground
+
+    def update(self, player_dx, player_dy):
+        # Move opposite to player movement
+        self.x -= player_dx * self.parallax_factor
+        self.y -= player_dy * self.parallax_factor
+
+        # Screen wrapping
+        self.x %= self.screen_width
+        self.y %= self.screen_height
+
+    def draw(self, screen):
+        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.size)
 
 # --- Starfield Animation Class ---
 class Star:
@@ -100,7 +126,7 @@ class Explosion:
         for p in self.particles:
             p.draw(screen)
 
-# --- Harvest Particle Class (New) ---
+# --- Harvest Particle Class ---
 class HarvestParticle:
     def __init__(self, x, y):
         self.x = x
@@ -126,7 +152,34 @@ class HarvestParticle:
     def draw(self, screen):
         # Draw a white circle
         pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.size)
-        
+
+# --- Engine Trail Particle Class ---
+class TrailParticle:
+    def __init__(self, x, y, angle):
+        self.x = x
+        self.y = y
+        self.size = random.randint(3, 6)
+        # Eject opposite to ship direction
+        spread = random.uniform(-0.5, 0.5)
+        speed = random.uniform(2, 5)
+        self.vx = -speed * math.cos(math.radians(angle) + spread)
+        self.vy = -speed * math.sin(math.radians(angle) + spread)
+        self.color = (0, 255, 255) # Cyan trail
+        self.alpha = 255
+        self.decay = 15
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.alpha -= self.decay
+        self.size -= 0.2
+    
+    def draw(self, screen):
+        if self.alpha > 0 and self.size > 0:
+            s = pygame.Surface((int(self.size*2), int(self.size*2)), pygame.SRCALPHA)
+            pygame.draw.circle(s, (*self.color, int(self.alpha)), (int(self.size), int(self.size)), int(self.size))
+            screen.blit(s, (self.x - self.size, self.y - self.size))
+
 # --- Spaceship Class (Player) ---
 class Spaceship:
     def __init__(self, screen_width, screen_height):
@@ -135,7 +188,7 @@ class Spaceship:
         self.velocity = 0
         self.max_velocity = 5
         self.acceleration = 0.2
-        self.deceleration = 0.1 # New deceleration rate
+        self.deceleration = 0.1
         self.rotation_speed = 3
         self.direction = -90 # Start facing up, in degrees
         self.screen_width = screen_width
@@ -144,9 +197,11 @@ class Spaceship:
         self.rect = pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
         # Invulnerability attributes
         self.invulnerable = False
-        self.invulnerability_duration = 180 # 3 seconds at 60 FPS
+        self.invulnerability_duration = 180 
         self.invulnerability_timer = 0
         self.blink = False
+        # Trail
+        self.trails = []
         
     def update(self):
         self.x += self.velocity * math.cos(math.radians(self.direction))
@@ -161,7 +216,6 @@ class Spaceship:
         # Handle invulnerability
         if self.invulnerable:
             self.invulnerability_timer -= 1
-            # Blink every 10 frames
             if self.invulnerability_timer % 10 < 5:
                 self.blink = True
             else:
@@ -171,15 +225,24 @@ class Spaceship:
                 self.invulnerable = False
                 self.blink = False
         
+        # Update trails
+        for p in self.trails:
+            p.update()
+        self.trails = [p for p in self.trails if p.alpha > 0 and p.size > 0]
+        
     def move_forward(self):
         self.velocity = min(self.max_velocity, self.velocity + self.acceleration)
+        # Add trail particles
+        angle_rad = math.radians(self.direction)
+        # Eject from back of ship
+        rear_x = self.x - self.size * math.cos(angle_rad)
+        rear_y = self.y - self.size * math.sin(angle_rad)
+        self.trails.append(TrailParticle(rear_x, rear_y, self.direction))
         
     def move_backward(self):
         self.velocity = max(-self.max_velocity, self.velocity - self.acceleration)
     
-    # Method to stop the ship completely
     def stop(self):
-        # Gradual deceleration
         if self.velocity > 0:
             self.velocity = max(0, self.velocity - self.deceleration)
         elif self.velocity < 0:
@@ -192,6 +255,10 @@ class Spaceship:
         self.direction += self.rotation_speed
         
     def draw(self, screen):
+        # Draw trails first (underneath)
+        for p in self.trails:
+            p.draw(screen)
+
         if self.blink:
             return # Don't draw if blinking
 
@@ -233,30 +300,47 @@ class Laser:
         self.is_enemy_laser = is_enemy_laser
 
         if is_enemy_laser:
-            # Enemy laser properties
             self.speed = 5
             self.color = ENEMY_COLOR
-            width, height = 5, 15
+            self.thickness = 5
+            self.length = 15
         else:
-            # Player laser properties
             self.speed = 10
             self.color = LASER_COLOR
-            # Increase width based on level, with a maximum cap
-            base_width = 5
-            width = min(base_width + (level // 2), 25)
-            height = 15
+            base_thickness = 5
+            self.thickness = min(base_thickness + (level // 2), 25)
+            self.length = 20 # Lasers are a bit longer now for visual effect
         
-        self.rect = pygame.Rect(self.x, self.y, width, height)
+        # The collision rect is simplified (small square) to avoid complex rotation math for hitboxes,
+        # but visually it will be a rotated rectangle.
+        self.rect = pygame.Rect(self.x, self.y, self.thickness, self.thickness)
+        self.angle = direction 
         
     def update(self):
-        # Move the laser forward
         self.x += self.speed * math.cos(math.radians(self.direction))
         self.y += self.speed * math.sin(math.radians(self.direction))
         self.rect.center = (int(self.x), int(self.y))
         
     def draw(self, screen):
-        # Draw a simple rectangle for the laser
-        pygame.draw.rect(screen, self.color, self.rect)
+        # 1. Create a surface for the laser (horizontal initially)
+        laser_surf = pygame.Surface((self.length, self.thickness), pygame.SRCALPHA)
+        pygame.draw.rect(laser_surf, self.color, (0, 0, self.length, self.thickness))
+        
+        # 2. Rotate it to match direction
+        # Pygame rotates counter-clockwise, our math is clockwise/standard, so we use negative direction.
+        rotated_laser = pygame.transform.rotate(laser_surf, -self.direction)
+        new_rect = rotated_laser.get_rect(center=(int(self.x), int(self.y)))
+        
+        # 3. Draw Glow (0.6x size)
+        glow_size = max(self.length, self.thickness) * 0.6
+        glow_surf = pygame.Surface((int(glow_size * 2), int(glow_size * 2)), pygame.SRCALPHA)
+        glow_color = (*self.color, 50) # Low alpha for glow
+        pygame.draw.circle(glow_surf, glow_color, (int(glow_size), int(glow_size)), int(glow_size))
+        
+        # Blit glow centered
+        screen.blit(glow_surf, (int(self.x - glow_size), int(self.y - glow_size)))
+        # Blit rotated laser
+        screen.blit(rotated_laser, new_rect.topleft)
         
     def is_off_screen(self):
         return self.x < 0 or self.x > self.screen_width or self.y < 0 or self.y > self.screen_height
@@ -273,14 +357,37 @@ class SpaceRock:
         self.rect = pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
         self.is_destroyed = False
         self.score_value = 10
-        self.is_life_rock = True # Flag to indicate this is a life-giving rock
+        self.is_life_rock = True 
+        
+        # Procedural Generation
+        self.image = pygame.Surface((self.size * 2 + 10, self.size * 2 + 10), pygame.SRCALPHA)
+        self.points = []
+        num_points = random.randint(7, 12)
+        center = (self.size + 5, self.size + 5)
+        for i in range(num_points):
+            angle = math.radians((i / num_points) * 360)
+            # Vary radius to make it jagged
+            r = self.size * random.uniform(0.7, 1.2)
+            px = center[0] + r * math.cos(angle)
+            py = center[1] + r * math.sin(angle)
+            self.points.append((px, py))
+        
+        pygame.draw.polygon(self.image, ROCK_COLOR, self.points)
+        pygame.draw.polygon(self.image, (200, 200, 200), self.points, 2) # Outline
+
+        self.rotation = 0
+        self.rot_speed = random.uniform(-2, 2)
         
     def update(self):
         self.y += self.speed
         self.rect.center = (int(self.x), int(self.y))
+        self.rotation += self.rot_speed
         
     def draw(self, screen):
-        pygame.draw.circle(screen, ROCK_COLOR, (int(self.x), int(self.y)), self.size)
+        # Rotate the generated image
+        rotated_image = pygame.transform.rotate(self.image, self.rotation)
+        new_rect = rotated_image.get_rect(center=self.rect.center)
+        screen.blit(rotated_image, new_rect.topleft)
         
     def is_off_screen(self):
         return self.y > self.screen_height + self.size
@@ -289,8 +396,7 @@ class EnemySpaceship:
     def __init__(self, screen_width, screen_height, level):
         self.size = 20
         self.x = random.randrange(self.size, screen_width - self.size)
-        self.y = random.randrange(-300, -50) # Start off-screen at a random x
-        # Increase speed based on level
+        self.y = random.randrange(-300, -50) 
         self.base_speed = random.uniform(1.5, 3.5)
         capped_level = min(level, 2)
         self.speed_multiplier = 1 + (capped_level - 1) * 0.2
@@ -314,20 +420,16 @@ class EnemySpaceship:
         self.rect.center = (int(self.x), int(self.y))
 
     def can_shoot(self, current_time, level):
-        # Enemy ships start firing at level 3
         if level < 3:
             return False
-        # Fire a laser every 1.5 seconds at level 3, faster at higher levels
         shoot_cooldown = (1500 - (level - 3) * 50) * 2
         return current_time - self.last_shot_time > max(500, shoot_cooldown)
 
     def shoot(self, player_pos):
-        # Calculate the direction to the player
         dx = player_pos[0] - self.x
         dy = player_pos[1] - self.y
         angle = math.degrees(math.atan2(dy, dx))
         
-        # Create a new laser from the enemy's position, set to target the player
         new_laser = Laser(self.x, self.y, angle, self.screen_width, self.screen_height, is_enemy_laser=True)
         self.last_shot_time = pygame.time.get_ticks()
         return new_laser
@@ -348,22 +450,40 @@ class EnemySpaceship:
 class NeutralSpaceship:
     def __init__(self, screen_width, screen_height):
         self.size = 15
-        self.x = random.randrange(self.size, screen_width - self.size)
-        self.y = random.randrange(-300, -50)
-        self.speed = random.uniform(1.0, 2.0)
-        self.direction = random.uniform(0, 360) # Random initial direction
         self.screen_width = screen_width
         self.screen_height = screen_height
-        self.rect = pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
+        self.speed = random.uniform(1.0, 2.0)
         self.is_destroyed = False
-        self.is_life_stealer = True # Flag to indicate this is a life-stealing ship
+        self.is_life_stealer = True
+        
+        # Pick a side to spawn from: 0=Top, 1=Right, 2=Bottom, 3=Left
+        side = random.randint(0, 3)
+        buffer = self.size * 2
+        
+        if side == 0: # Top
+            self.x = random.randrange(0, screen_width)
+            self.y = -buffer
+            self.direction = random.uniform(45, 135) # Point generally down
+        elif side == 1: # Right
+            self.x = screen_width + buffer
+            self.y = random.randrange(0, screen_height)
+            self.direction = random.uniform(135, 225) # Point generally left
+        elif side == 2: # Bottom
+            self.x = random.randrange(0, screen_width)
+            self.y = screen_height + buffer
+            self.direction = random.uniform(225, 315) # Point generally up
+        else: # Left
+            self.x = -buffer
+            self.y = random.randrange(0, screen_height)
+            self.direction = random.uniform(-45, 45) # Point generally right
+
+        self.rect = pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
         
     def update(self):
         self.x += self.speed * math.cos(math.radians(self.direction))
         self.y += self.speed * math.sin(math.radians(self.direction))
         
-        self.x %= self.screen_width
-        self.y %= self.screen_height
+        # REMOVED screen wrapping logic so they fly past the screen
         
         self.rect.center = (int(self.x), int(self.y))
     
@@ -376,26 +496,28 @@ class NeutralSpaceship:
         pygame.draw.polygon(screen, NEUTRAL_COLOR, points)
         
     def is_off_screen(self):
-        return False
+        # Check if they have flown fully off screen (plus a small buffer)
+        margin = 100
+        return (self.x < -margin or self.x > self.screen_width + margin or
+                self.y < -margin or self.y > self.screen_height + margin)
 
-# --- Boss Class (New) ---
+# --- Boss Class ---
 class Boss:
     def __init__(self, screen_width, screen_height, level):
         self.size = 100
         self.x = screen_width / 2
         self.y = -self.size
-        self.speed = 0.5 # Slower speed
-        self.max_health = (10 + (level - 4) * 10) * 2 # More aggressive HP scaling
+        self.speed = 0.5 
+        self.max_health = (10 + (level - 4) * 10) * 2 
         self.health = self.max_health
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.rect = pygame.Rect(self.x - self.size / 2, self.y - self.size / 2, self.size, self.size)
         self.is_destroyed = False
-        self.score_value = 0 # Boss grants no points
+        self.score_value = 0 
         self.last_shot_time = pygame.time.get_ticks()
 
     def update(self, player_pos):
-        # Move towards the player, like other enemies
         dx = player_pos[0] - self.x
         dy = player_pos[1] - self.y
         dist = math.hypot(dx, dy)
@@ -407,37 +529,28 @@ class Boss:
         self.rect.center = (int(self.x), int(self.y))
 
     def can_shoot(self, current_time, level):
-        # Boss starts shooting at level 5 (its second appearance)
         if level < 5:
             return False
-        # Cooldown decreases as level increases, making it fire faster
         shoot_cooldown = max(500, 2000 - (level - 5) * 100)
         return current_time - self.last_shot_time > shoot_cooldown
 
     def shoot(self, player_pos):
-        # Calculate the direction to the player
         dx = player_pos[0] - self.x
         dy = player_pos[1] - self.y
         angle = math.degrees(math.atan2(dy, dx))
         
-        # Create a new laser from the boss's position
         new_laser = Laser(self.x, self.y, angle, self.screen_width, self.screen_height, is_enemy_laser=True)
         self.last_shot_time = pygame.time.get_ticks()
         return new_laser
 
     def draw(self, screen):
-        # Draw the boss square
         pygame.draw.rect(screen, ENEMY_COLOR, self.rect)
-        # Draw the health bar
         if self.health > 0:
-            # Health bar background
             bg_rect = pygame.Rect(self.rect.left, self.rect.top - 20, self.rect.width, 10)
             pygame.draw.rect(screen, DARK_BLUE, bg_rect)
-            # Health bar foreground
             health_percentage = self.health / self.max_health
             fg_rect = pygame.Rect(self.rect.left, self.rect.top - 20, self.rect.width * health_percentage, 10)
             pygame.draw.rect(screen, LIFE_COLOR, fg_rect)
-            # Health bar outline
             pygame.draw.rect(screen, WHITE, bg_rect, 1)
 
     def take_damage(self, amount):
@@ -448,20 +561,20 @@ class Boss:
     def is_off_screen(self):
         return self.y > self.screen_height + self.size
 
-# --- Black Hole Class (New) ---
+# --- Black Hole Class ---
 class BlackHole:
     def __init__(self, screen_width, screen_height, level):
         self.screen_width = screen_width
         self.screen_height = screen_height
         
-        self.radius = 40  # The event horizon radius
-        self.gravity_radius = 300 # The area of effect
-        self.strength = 200 + (level * 15) # How strongly it pulls objects
+        self.radius = 40 
+        self.gravity_radius = 300 
+        self.strength = 200 + (level * 15) 
 
         self.direction = random.choice([-1, 1])
-        if self.direction == 1: # Left to right
+        if self.direction == 1: 
             self.x = -self.radius
-        else: # Right to left
+        else: 
             self.x = self.screen_width + self.radius
         
         self.y = random.randrange(self.radius, self.screen_height - self.radius)
@@ -473,32 +586,24 @@ class BlackHole:
         self.x += self.speed * self.direction
         self.rect.center = (int(self.x), int(self.y))
         
-        # Deactivate if it moves off-screen
         if (self.direction == 1 and self.x > self.screen_width + self.radius * 2) or \
            (self.direction == -1 and self.x < -self.radius * 2):
             self.is_active = False
 
     def draw(self, screen):
-        # Draw a semi-transparent gravity well effect
         gravity_surface = pygame.Surface((self.gravity_radius * 2, self.gravity_radius * 2), pygame.SRCALPHA)
         pygame.draw.circle(gravity_surface, (50, 0, 80, 80), (self.gravity_radius, self.gravity_radius), self.gravity_radius)
         screen.blit(gravity_surface, (self.x - self.gravity_radius, self.y - self.gravity_radius))
         
-        # Draw the black event horizon
         pygame.draw.circle(screen, (0, 0, 0), (int(self.x), int(self.y)), self.radius)
 
     def attract(self, obj):
-        # Calculate vector to the black hole
         dx = self.x - obj.x
         dy = self.y - obj.y
         dist = math.hypot(dx, dy)
 
-        # Check if the object is within the gravity well but outside the event horizon
         if self.radius < dist < self.gravity_radius:
-            # Calculate pull force (stronger closer to the center)
             pull_force = self.strength / (dist * 2)
-            
-            # Apply the force to the object's coordinates
             obj.x += pull_force * (dx / dist)
             obj.y += pull_force * (dy / dist)
 
@@ -514,7 +619,10 @@ class Game:
         self.FULLSCREEN = FULLSCREEN
         self.FPS = FPS
 
-        self.screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), pygame.FULLSCREEN if self.FULLSCREEN else 0)
+        # We add pygame.SCALED here. This ensures that if we pick a lower resolution
+        # like 1280x720, but we are in Fullscreen, it stretches to fill the monitor.
+        flags = (pygame.FULLSCREEN | pygame.SCALED) if self.FULLSCREEN else 0
+        self.screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), flags)
         pygame.display.set_caption("Tristar Mania")
 
         self.font = pygame.font.Font(None, 74)
@@ -526,7 +634,8 @@ class Game:
 
 
         self.stars = [Star(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(300)]
-        self.high_scores = [] # Temporary leaderboard stored in a list
+        self.parallax_stars = [ParallaxStar(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(150)] # Initial parallax stars
+        self.high_scores = [] 
         self.volume = 0.5
         
         self.resolutions = [(1280, 720), (1600, 900), (1920, 1080)]
@@ -537,54 +646,45 @@ class Game:
             "Move Down": pygame.K_s,
             "Move Left": pygame.K_a,
             "Move Right": pygame.K_d,
-            "Shoot": pygame.K_SPACE # Add a new keybind for shooting
+            "Shoot": pygame.K_SPACE 
         }
         self.remapping_key_for = None
         
         self.explosions = []
-        self.music_is_playing = False # Flag to manage music state
+        self.music_is_playing = False 
 
         # --- Sound Effects ---
-        # Generate the sound data as a list of integers
         laser_sound_list = [int(20000 * sinc(2 * math.pi * 440 * i / SAMPLE_RATE)) for i in range(SAMPLE_RATE // 10)]
-        # A simple, short beep for menu clicks
         menu_click_sound_list = [int(15000 * math.sin(2 * math.pi * 880 * i / SAMPLE_RATE)) for i in range(SAMPLE_RATE // 20)]
-        # Explosion sound: decaying white noise
         explosion_sound_list = [int(random.uniform(-1, 1) * 20000 * (1 - i / (SAMPLE_RATE // 4))) for i in range(SAMPLE_RATE // 4)]
-        # Level-up sound: A rising tone
+        
         level_up_sound_list = []
-        duration_samples = SAMPLE_RATE // 3 # 0.33 seconds
+        duration_samples = SAMPLE_RATE // 3
         for i in range(duration_samples):
-            # Frequency sweep from C5 to C6
             start_freq = 523.25
             end_freq = 1046.50
             current_freq = start_freq + (end_freq - start_freq) * (i / duration_samples)
-            # Fade out the amplitude
             amplitude = 18000 * (1 - (i / duration_samples))
             sample = amplitude * math.sin(2 * math.pi * current_freq * i / SAMPLE_RATE)
             level_up_sound_list.append(int(sample))
-        # Harvest sound: A short, high-pitched "ding"
+        
         harvest_sound_list = []
-        duration_samples = int(SAMPLE_RATE * 0.1) # 0.1 seconds
+        duration_samples = int(SAMPLE_RATE * 0.1) 
         for i in range(duration_samples):
-            freq = 1500 + 500 * (i / duration_samples) # Rising pitch
-            amplitude = 10000 * math.sin(math.pi * (i / duration_samples)) # Fades in and out
+            freq = 1500 + 500 * (i / duration_samples) 
+            amplitude = 10000 * math.sin(math.pi * (i / duration_samples)) 
             sample = amplitude * math.sin(2 * math.pi * freq * i / SAMPLE_RATE)
             harvest_sound_list.append(int(sample))
         
-        # Hurt sound: A longer, more clear sine wave
         hurt_sound_list = []
-        duration_samples = int(SAMPLE_RATE * 0.4) # 0.4 seconds
-        frequency = 150 # Low frequency for a "thump"
-        amplitude_envelope = 1.0 # Start at full volume
+        duration_samples = int(SAMPLE_RATE * 0.4) 
+        frequency = 150 
+        amplitude_envelope = 1.0 
         for i in range(duration_samples):
-            # A decaying sine wave
             amplitude_envelope = max(0, 1 - (i / duration_samples))
             sample = 15000 * amplitude_envelope * math.sin(2 * math.pi * frequency * i / SAMPLE_RATE)
             hurt_sound_list.append(int(sample))
 
-        # Convert the lists to a NumPy array with the correct data type (signed 16-bit integers)
-        # The mixer requires a 2-dimensional array for stereo sound, so we use column_stack to create two identical channels.
         laser_sound_1d = np.array(laser_sound_list, dtype=np.int16)
         menu_click_sound_1d = np.array(menu_click_sound_list, dtype=np.int16)
         explosion_sound_1d = np.array(explosion_sound_list, dtype=np.int16)
@@ -607,19 +707,18 @@ class Game:
         self.hurt_sound = pygame.mixer.Sound(pygame.sndarray.make_sound(hurt_sound_data))
 
         # --- Background Music ---
-        note_duration = int(SAMPLE_RATE * 0.5) # Each note is 0.5 seconds long
-        frequencies = [65.41, 49.00, 58.27, 43.65] # Frequencies for C2, G1, A#1, F1
+        note_duration = int(SAMPLE_RATE * 0.5) 
+        frequencies = [65.41, 49.00, 58.27, 43.65] 
         music_sound_list = []
         for freq in frequencies:
             for i in range(note_duration):
-                amplitude = 12000 * (1 - (i / note_duration)) # Decay envelope
+                amplitude = 12000 * (1 - (i / note_duration)) 
                 sample = amplitude * math.sin(2 * math.pi * freq * i / SAMPLE_RATE)
                 music_sound_list.append(int(sample))
         music_sound_1d = np.array(music_sound_list, dtype=np.int16)
         music_sound_data = np.column_stack((music_sound_1d, music_sound_1d))
         self.background_music = pygame.mixer.Sound(pygame.sndarray.make_sound(music_sound_data))
 
-        # List of all sounds to easily manage volume
         self.all_sounds = [self.laser_sound, self.explosion_sound, self.menu_click_sound, self.level_up_sound, self.harvest_sound, self.hurt_sound, self.background_music]
         self.update_volumes()
 
@@ -650,7 +749,7 @@ class Game:
         surface.blit(textobj, textrect)
         return textobj, textrect
 
-    def draw_lifebar(self, current_lives, max_lives):
+    def draw_lifebar(self, current_lives, max_lives, surface):
         bar_width = 30
         bar_height = 15
         bar_spacing = 10
@@ -658,17 +757,31 @@ class Game:
         start_x = 15
         start_y = 15
         
+        # Determine color based on health status
+        current_color = LIFE_COLOR
+        if current_lives == 1:
+            # Flash white and red
+            if (pygame.time.get_ticks() // 200) % 2 == 0:
+                current_color = WHITE
+        
         for i in range(max_lives):
             bar_rect = pygame.Rect(start_x + i * (bar_width + bar_spacing), start_y, bar_width, bar_height)
-            color = LIFE_COLOR if i < current_lives else DARK_BLUE
-            pygame.draw.rect(self.screen, color, bar_rect)
-            pygame.draw.rect(self.screen, WHITE, bar_rect, 2) # Outline
+            color = current_color if i < current_lives else DARK_BLUE
+            pygame.draw.rect(surface, color, bar_rect)
+            pygame.draw.rect(surface, WHITE, bar_rect, 2) 
 
-    def animate_background(self):
-        self.screen.fill(DARK_BLUE)
+    def animate_background(self, surface, player_dx=0, player_dy=0):
+        surface.fill(DARK_BLUE)
+        
+        # Update and draw parallax stars first (background layer)
+        for p_star in self.parallax_stars:
+            p_star.update(player_dx, player_dy)
+            p_star.draw(surface)
+
+        # Update and draw standard falling stars (foreground layer)
         for star in self.stars:
             star.update()
-            star.draw(self.screen)
+            star.draw(surface)
             
     def draw_pause_symbol(self):
         overlay = pygame.Surface((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -701,7 +814,7 @@ class Game:
         exit_game = False
         resume_game = False
         load_game = False
-        save_game = False # New state for the save game option
+        save_game = False 
 
         for i, item in enumerate(menu_items):
             x = self.SCREEN_WIDTH // 2
@@ -742,7 +855,7 @@ class Game:
                     self.menu_click_sound.play()
                     running = False
 
-            self.animate_background()
+            self.animate_background(self.screen)
             self.draw_text(title_text, self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2)
 
             if fade_alpha < 255:
@@ -757,7 +870,7 @@ class Game:
             self.clock.tick(self.FPS)
 
     def video_settings_menu(self):
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         video_items = ["Fullscreen: ", "Resolution: ", "Back"]
         item_spacing = 100
         
@@ -771,20 +884,23 @@ class Game:
                     if fullscreen_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
                         self.FULLSCREEN = not self.FULLSCREEN
-                        flags = pygame.FULLSCREEN if self.FULLSCREEN else 0
+                        # Apply pygame.SCALED here as well
+                        flags = (pygame.FULLSCREEN | pygame.SCALED) if self.FULLSCREEN else 0
                         self.screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), flags)
                     elif resolution_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
                         self.current_resolution_index = (self.current_resolution_index + 1) % len(self.resolutions)
                         self.SCREEN_WIDTH, self.SCREEN_HEIGHT = self.resolutions[self.current_resolution_index]
-                        flags = pygame.FULLSCREEN if self.FULLSCREEN else 0
+                        # Apply pygame.SCALED here as well
+                        flags = (pygame.FULLSCREEN | pygame.SCALED) if self.FULLSCREEN else 0
                         self.screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), flags)
                         self.stars = [Star(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(300)]
+                        self.parallax_stars = [ParallaxStar(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(150)]
                     elif back_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
                         running = False
             
-            self.animate_background()
+            self.animate_background(self.screen)
             start_y = self.SCREEN_HEIGHT // 2 - (len(video_items) * item_spacing) // 2
 
             self.draw_text("Video Settings", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, start_y - 100)
@@ -811,7 +927,7 @@ class Game:
         return text_surface, text_rect
 
     def audio_settings_menu(self):
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         item_spacing = 100
         start_y = self.SCREEN_HEIGHT // 2 - (2 * item_spacing) // 2
 
@@ -836,7 +952,7 @@ class Game:
                         running = False
                 elif event.type == pygame.MOUSEBUTTONUP:
                     if dragging_slider:
-                        self.menu_click_sound.play() # Play sound on release
+                        self.menu_click_sound.play() 
                         dragging_slider = False
                 elif event.type == pygame.MOUSEMOTION and dragging_slider:
                     mouse_x, _ = event.pos
@@ -844,7 +960,7 @@ class Game:
                     self.volume = max(0, min(1, new_volume))
                     self.update_volumes()
 
-            self.animate_background()
+            self.animate_background(self.screen)
             
             self.draw_text("Audio Settings", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, start_y - 100)
 
@@ -863,19 +979,18 @@ class Game:
             self.clock.tick(self.FPS)
             
     def controls_settings_menu(self):
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         item_spacing = 100
         
         running = True
         while running:
-            self.animate_background()
+            self.animate_background(self.screen)
             start_y = self.SCREEN_HEIGHT // 2 - (len(self.keybinds) * item_spacing) // 2
 
             self.draw_text("Controls Settings", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, start_y - 100)
             
             control_rects = {}
             for i, (action, key) in enumerate(self.keybinds.items()):
-                # Get the key name, handling the special case for spacebar
                 key_name = pygame.key.name(key).upper()
                 if key == pygame.K_SPACE:
                     key_name = "SPACEBAR"
@@ -934,7 +1049,7 @@ class Game:
                         self.menu_click_sound.play()
                         running = False
 
-            self.animate_background()
+            self.animate_background(self.screen)
             start_y = self.SCREEN_HEIGHT // 2 - (len(options_items) * item_spacing) // 2
 
             self.draw_text("Options", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, start_y - 100)
@@ -946,15 +1061,79 @@ class Game:
             
             pygame.display.flip()
             self.clock.tick(self.FPS)
+
+    def load_game_menu(self):
+        pygame.mouse.set_visible(True)
+        input_code = ""
+        
+        running = True
+        while running:
+            self.animate_background(self.screen)
+            
+            # Event handling
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_BACKSPACE:
+                        input_code = input_code[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        if len(input_code) == 4:
+                            level = self.code_to_level(input_code)
+                            self.menu_click_sound.play()
+                            self.start_game_animation(start_level=level)
+                            return # Exit load menu after game ends
+                    elif event.key == pygame.K_ESCAPE:
+                        running = False
+                    else:
+                        if len(input_code) < 4 and event.unicode.upper() in LETTER_MAPPING:
+                             input_code += event.unicode.upper()
+                
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if back_rect.collidepoint(event.pos):
+                        self.menu_click_sound.play()
+                        return
+                    if start_rect.collidepoint(event.pos) and len(input_code) == 4:
+                         level = self.code_to_level(input_code)
+                         self.menu_click_sound.play()
+                         self.start_game_animation(start_level=level)
+                         return
+
+            # Draw UI
+            self.draw_text("LOAD GAME", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 150)
+            self.draw_text("Enter 4-Letter Code:", self.menu_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 50)
+            
+            # Draw Box Background
+            box_width = 300
+            box_height = 80
+            box_rect = pygame.Rect(self.SCREEN_WIDTH // 2 - box_width // 2, self.SCREEN_HEIGHT // 2 + 50 - box_height // 2, box_width, box_height)
+            pygame.draw.rect(self.screen, SLIDER_BG_COLOR, box_rect)
+            pygame.draw.rect(self.screen, WHITE, box_rect, 2) 
+
+            # Draw Code Text
+            self.draw_text(input_code, self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 50)
+            
+            # Draw Buttons
+            if len(input_code) == 4:
+                 _, start_rect = self.draw_and_get_rect("START", self.menu_font, NEUTRAL_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 150)
+            else:
+                 # Dummy rect to prevent crash on collision check if not drawn
+                 start_rect = pygame.Rect(0,0,0,0) 
+
+            _, back_rect = self.draw_and_get_rect("Back", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT - 100)
+            
+            pygame.display.flip()
+            self.clock.tick(self.FPS)
             
     def main_menu(self):
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         menu_items = ["New Game", "Load Game", "Leaderboards", "Options", "Exit"]
         item_spacing = 100
         
         running = True
         while running:
-            self.play_background_music() # Ensure music is playing in the menu
+            self.play_background_music() 
             
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -977,13 +1156,11 @@ class Game:
                         pygame.quit()
                         sys.exit()
 
-            self.animate_background()
+            self.animate_background(self.screen)
             
-            # Draw the title and main menu text
             self.draw_text("Tristar Mania", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 250)
             self.draw_text("Main Menu", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 150)
             
-            # Start the menu items further down to prevent overlap
             menu_start_y = self.SCREEN_HEIGHT // 2
             
             _, new_game_rect = self.draw_and_get_rect("New Game", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, menu_start_y)
@@ -997,11 +1174,11 @@ class Game:
 
     def leaderboard_menu(self):
         """Displays the temporary leaderboard."""
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         
         running = True
         while running:
-            self.animate_background()
+            self.animate_background(self.screen)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
@@ -1009,11 +1186,10 @@ class Game:
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if back_rect.collidepoint(event.pos):
                         self.menu_click_sound.play()
-                        return # Exit the leaderboard menu
+                        return 
 
             self.draw_text("LEADERBOARD", self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 200)
 
-            # Draw the leaderboard
             for i, score in enumerate(self.high_scores):
                 self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100 + i * 40)
             
@@ -1024,7 +1200,7 @@ class Game:
     
     def level_to_code(self, level):
         """Encodes a level number into a 4-letter code using base-26 + offset."""
-        offset = 100000  # lowered so 4 letters can hold the value
+        offset = 100000 
         encoded_level = level + offset
 
         code_chars = []
@@ -1032,45 +1208,42 @@ class Game:
             encoded_level, remainder = divmod(encoded_level, 26)
             code_chars.append(LETTER_MAPPING[remainder])
 
-        # Reverse to get the correct order
         return ''.join(reversed(code_chars))
 
     def code_to_level(self, code):
         """Decodes a 4-letter code back into a level number."""
         offset = 100000
         if len(code) != 4:
-            return 1  # default to level 1 if code length is wrong
+            return 1 
 
         value = 0
         for char in code:
             if char not in LETTER_MAPPING:
-                return 1  # invalid characters fallback
+                return 1 
             value = value * 26 + LETTER_MAPPING.index(char)
 
         decoded_level = value - offset
         return max(1, decoded_level)
 
- # Ensure level is at least 1
     
     def save_game_screen(self, level):
         """Displays the save code for the current level."""
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         save_code = self.level_to_code(level)
         
         running = True
         while running:
-            self.animate_background()
+            self.animate_background(self.screen)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     self.menu_click_sound.play()
-                    return # Exit save screen and return to pause menu
+                    return 
 
             self.draw_text("SAVE CODE", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 150)
             
-            # Display the generated code
             self.draw_text(save_code, self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2)
             
             self.draw_text("Write this code down to load this level later.", self.small_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 100)
@@ -1079,143 +1252,119 @@ class Game:
             pygame.display.flip()
             self.clock.tick(self.FPS)
 
-    def load_game_menu(self):
-        """Handles the text input for the load code."""
-        pygame.mouse.set_visible(True) # Show cursor
-        input_text = ""
-        input_box_rect = pygame.Rect(self.SCREEN_WIDTH // 2 - 150, self.SCREEN_HEIGHT // 2 - 25, 300, 50)
-        
-        running = True
-        while running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN:
-                        self.menu_click_sound.play()
-                        initial_level = self.code_to_level(input_text)
-                        self.start_game_animation(start_level=initial_level)
-                        return # Exit the load menu
-                    elif event.key == pygame.K_BACKSPACE:
-                        input_text = input_text[:-1]
-                    else:
-                        if len(input_text) < 4:
-                            input_text += event.unicode.upper()
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    if back_rect.collidepoint(event.pos):
-                        self.menu_click_sound.play()
-                        return # Exit the load menu
-            
-            self.animate_background()
-            self.draw_text("Enter 4-letter code", self.font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100)
-
-            # Draw the input box
-            pygame.draw.rect(self.screen, LIGHT_BLUE, input_box_rect, 2)
-            input_text_surface = self.menu_font.render(input_text, True, WHITE)
-            self.screen.blit(input_text_surface, (input_box_rect.x + 10, input_box_rect.y + 10))
-            
-            _, back_rect = self.draw_and_get_rect("Back", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 100)
-
-            pygame.display.flip()
-            self.clock.tick(self.FPS)
-
-    def game_over_screen(self, final_score):
+    def game_over_screen(self, final_score, final_level):
         """Displays the game over screen with the temporary leaderboard."""
-        pygame.mouse.set_visible(True) # Show cursor
+        pygame.mouse.set_visible(True) 
         self.high_scores.append(final_score)
         self.high_scores.sort(reverse=True)
-        # Keep only the top 5 scores
         self.high_scores = self.high_scores[:5]
         
-        # Calculate level based on the new incremental formula
         if final_score < 0: final_score = 0
-        # Formula to find level L from score S: 25L^2 + 425L - (450 + S) = 0
-        # Using the quadratic formula solution for L
-        final_level = int((-425 + math.sqrt(225625 + 100 * final_score)) / 50)
         
         save_code = self.level_to_code(final_level)
 
         running = True
         while running:
-            self.animate_background()
+            self.animate_background(self.screen)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     self.menu_click_sound.play()
-                    return # Exit the game over screen and return to main menu
+                    return 
 
             self.draw_text("GAME OVER", self.font, ENEMY_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 200)
-            self.draw_text(f"Your Score: {final_score}", self.menu_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100)
+            self.draw_text(f"Your Score: {final_score}", self.menu_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 130)
             
-            self.draw_text(f"Level Code: {save_code}", self.menu_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 40)
+            self.draw_text(f"Level Reached: {final_level}", self.menu_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 90)
+            # Added more spacing (approx 50px gap) here for the 'whitespace' effect
+            self.draw_text(f"Level Code: {save_code}", self.menu_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 30)
             
-            # Draw the leaderboard
-            self.draw_text("LEADERBOARD", self.leaderboard_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2)
+            self.draw_text("LEADERBOARD", self.leaderboard_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 10)
             for i, score in enumerate(self.high_scores):
-                self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 50 + i * 40)
+                self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 60 + i * 40)
             
             self.draw_text("Click to return to menu", self.small_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT - 50)
             
             pygame.display.flip()
             self.clock.tick(self.FPS)
 
+    def take_screenshot(self):
+        """Takes a screenshot and saves it to the user's Pictures/TristarMania folder."""
+        # Determine the user's Pictures directory in a cross-platform way
+        pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures")
+        save_dir = os.path.join(pictures_dir, "TristarMania")
+        
+        # Ensure the directory exists
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except OSError:
+                # Fallback to current directory if permission denied
+                save_dir = "."
+        
+        # Generate a unique filename with a timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"screenshot_{timestamp}.png"
+        full_path = os.path.join(save_dir, filename)
+        
+        # Save the surface
+        pygame.image.save(self.screen, full_path)
+        print(f"Screenshot saved to: {full_path}")
+
     def start_game_animation(self, start_level=1):
         """
         Starts the game with a flight animation.
         start_level: The level to begin at.
         """
-        self.stop_background_music() # Stop menu music when game starts
+        self.stop_background_music() 
         
+        # Surface for rendering game world (supports screen shake)
+        display_surface = pygame.Surface((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
+
         spaceship = Spaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT)
         is_paused = False
         frame_counter = 0
         
-        # Set initial score and level based on start_level and new progression
         level = start_level
-        # Total score S to reach level L: S(L) = (L-1) * (450 + 25L)
         score = int((start_level - 1) * (450 + 25 * start_level)) if start_level > 1 else 0
-        # Score required for next level (L+1): S(L+1) = L * (475 + 25L)
         score_for_next_level = int(level * (475 + 25 * level))
 
-        # Calculate lives based on the starting level
-        # Start with 4 lives at level 1, and gain 1 for each subsequent level.
         initial_lives = 4 + (start_level - 1)
         lives = initial_lives
         max_lives = initial_lives
-        boss_spawned_this_level = False # New flag for boss spawning
+        boss_spawned_this_level = False 
 
-        # Lists for obstacles and lasers
         rocks = []
         enemies = []
         neutrals = []
-        bosses = [] # New list for bosses
+        bosses = [] 
         player_lasers = []
         enemy_lasers = []
         harvest_particles = []
         
-        # Black Hole state
         black_hole = None
-        # Spawn first black hole between 20 and 40 seconds
         black_hole_timer = random.randint(20 * self.FPS, 40 * self.FPS)
 
-        # Initial flight animation phase
-        pygame.mouse.set_visible(False) # Hide cursor during gameplay
+        # Shake and Level Up Popups
+        shake_offset = [0, 0]
+        shake_timer = 0
+        level_up_timer = 0
+        
+        pygame.mouse.set_visible(False) 
         while spaceship.y > self.SCREEN_HEIGHT / 3:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
             
-            self.animate_background()
+            self.animate_background(self.screen)
             spaceship.y -= spaceship.max_velocity
             spaceship.draw(self.screen)
             pygame.display.flip()
             self.clock.tick(self.FPS)
         
-        # Player control phase
         running = True
         while running:
             event = None
@@ -1227,16 +1376,16 @@ class Game:
                     if e.key == pygame.K_ESCAPE:
                         self.menu_click_sound.play()
                         is_paused = not is_paused
+                    if e.key == pygame.K_F12 or e.key == pygame.K_PRINTSCREEN:
+                        self.take_screenshot()
                     if not is_paused and e.key == self.keybinds["Shoot"]:
                         self.laser_sound.play()
-                        # Create a new laser from the spaceship's position and direction, passing the current level
                         new_laser = Laser(spaceship.x, spaceship.y, spaceship.direction, self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level=level)
                         player_lasers.append(new_laser)
                 event = e
             
             if not is_paused:
                 pygame.mouse.set_visible(False)
-                # Handle spaceship movement
                 keys = pygame.key.get_pressed()
                 if keys[self.keybinds["Move Up"]] or keys[pygame.K_UP]:
                     spaceship.move_forward()
@@ -1252,27 +1401,22 @@ class Game:
                 
                 # --- Update Game State ---
                 
-                # Handle black hole spawning
                 black_hole_timer -= 1
                 if not bosses and black_hole is None and black_hole_timer <= 0:
                     black_hole = BlackHole(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level)
-                    # Set timer for the next one (30-60 seconds)
                     black_hole_timer = random.randint(30 * self.FPS, 60 * self.FPS)
 
-                # Update black hole and apply its gravity effect
                 if black_hole:
                     black_hole.update()
                     if not black_hole.is_active:
                         black_hole = None
                     else:
-                        # Attract all relevant game objects
                         all_attractable_objects = [spaceship] + rocks + enemies + neutrals + bosses + player_lasers + enemy_lasers + harvest_particles
                         for obj in all_attractable_objects:
                             black_hole.attract(obj)
 
                 spaceship.update()
 
-                # Spawn obstacles periodically
                 frame_counter += 1
                 if frame_counter % SPAWN_RATE == 0:
                     obstacle_type = random.choice(["rock", "enemy", "neutral"])
@@ -1283,13 +1427,11 @@ class Game:
                     elif obstacle_type == "neutral":
                         neutrals.append(NeutralSpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
                 
-                # Spawn boss if conditions are met
                 if level >= 4 and not boss_spawned_this_level and not bosses:
                     bosses.append(Boss(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level))
                     boss_spawned_this_level = True
 
 
-                # Update and draw obstacles and lasers
                 for rock in rocks:
                     rock.update()
                 for enemy in enemies:
@@ -1309,51 +1451,50 @@ class Game:
                 for laser in enemy_lasers:
                     laser.update()
 
-                # Update explosions
                 for explosion in self.explosions:
                     explosion.update()
                 self.explosions = [exp for exp in self.explosions if not exp.is_done]
                 
-                # Update harvest particles
                 for particle in harvest_particles:
                     particle.update((spaceship.x, spaceship.y))
                 harvest_particles = [p for p in harvest_particles if p.lifespan > 0]
+
+            # --- Drawing to intermediate surface for Shake Effect ---
             
-            self.animate_background()
+            # Calculate player movement components for parallax
+            # dx = velocity * cos(direction), dy = velocity * sin(direction)
+            angle_rad = math.radians(spaceship.direction)
+            p_dx = spaceship.velocity * math.cos(angle_rad)
+            p_dy = spaceship.velocity * math.sin(angle_rad)
+
+            self.animate_background(display_surface, p_dx, p_dy)
             
-            # Draw black hole first so other objects are on top
             if black_hole:
-                black_hole.draw(self.screen)
+                black_hole.draw(display_surface)
             
-            # Draw all objects
-            spaceship.draw(self.screen)
+            spaceship.draw(display_surface)
             for rock in rocks:
-                rock.draw(self.screen)
+                rock.draw(display_surface)
             for enemy in enemies:
-                enemy.draw(self.screen)
+                enemy.draw(display_surface)
             for neutral in neutrals:
-                neutral.draw(self.screen)
-            for boss in bosses: # Draw boss
-                boss.draw(self.screen)
+                neutral.draw(display_surface)
+            for boss in bosses: 
+                boss.draw(display_surface)
             for laser in player_lasers:
-                laser.draw(self.screen)
+                laser.draw(display_surface)
             for laser in enemy_lasers:
-                laser.draw(self.screen)
+                laser.draw(display_surface)
 
-            # Draw explosions on top
             for explosion in self.explosions:
-                explosion.draw(self.screen)
+                explosion.draw(display_surface)
             
-            # Draw harvest particles on top
             for particle in harvest_particles:
-                particle.draw(self.screen)
+                particle.draw(display_surface)
 
-
-            # Check for collisions only when not paused
             if not is_paused:
-                # --- Black Hole Consumption ---
+                # --- Collision Logic & Shake Triggers ---
                 if black_hole:
-                    # Check objects getting sucked in
                     collections_to_check = [rocks, enemies, neutrals, player_lasers, enemy_lasers, harvest_particles]
                     for collection in collections_to_check:
                         for item in collection[:]:
@@ -1361,73 +1502,68 @@ class Game:
                                 self.explosions.append(Explosion(item.x, item.y, num_particles=5))
                                 collection.remove(item)
 
-                    # Check player getting sucked in
                     if not spaceship.invulnerable and math.hypot(spaceship.x - black_hole.x, spaceship.y - black_hole.y) < black_hole.radius:
                         self.hurt_sound.play()
+                        shake_timer = 20 # Shake on hit
                         self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
                         lives -= 1
                         if lives <= 0:
-                            self.game_over_screen(score)
+                            self.game_over_screen(score, level)
                             return
                         else:
                             spaceship.respawn()
                 
-                # Check for collisions that destroy the player
                 if not spaceship.invulnerable:
                     player_collided_physically = False
-                    # Player vs Rocks
                     for rock in rocks[:]:
                         if spaceship.check_collision(rock.rect):
                             self.hurt_sound.play()
+                            shake_timer = 20 # Shake on hit
                             self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
                             lives -= 1
                             rocks.remove(rock)
                             player_collided_physically = True
                             break
-                    # Player vs Enemies
                     if not player_collided_physically:
                         for enemy in enemies[:]:
                             if spaceship.check_collision(enemy.rect):
                                 self.hurt_sound.play()
+                                shake_timer = 20 # Shake on hit
                                 self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
                                 lives -= 1
                                 enemies.remove(enemy)
                                 player_collided_physically = True
                                 break
-                    # Player vs Boss
                     if not player_collided_physically:
                         for boss in bosses[:]:
                             if spaceship.check_collision(boss.rect):
                                 self.hurt_sound.play()
+                                shake_timer = 30 # Stronger shake
                                 self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
-                                lives -= 2  # Boss collision is more punishing
+                                lives -= 2  
                                 player_collided_physically = True
-                                break # Only one boss, but good practice
+                                break 
                     
-                    # If a physical collision happened, respawn the ship
                     if player_collided_physically:
                         if lives <= 0:
-                            self.game_over_screen(score)
+                            self.game_over_screen(score, level)
                             return
                         else:
                             spaceship.respawn()
                     
-                    # Player vs Enemy Lasers (handled separately, does not trigger respawn)
-                    # This check happens only if the ship isn't invulnerable from a recent respawn
                     if not spaceship.invulnerable:
                         for laser in enemy_lasers[:]:
                             if spaceship.check_collision(laser.rect):
                                 self.hurt_sound.play()
+                                shake_timer = 20
                                 self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
                                 lives -= 1
                                 enemy_lasers.remove(laser)
                                 if lives <= 0:
-                                    self.game_over_screen(score)
+                                    self.game_over_screen(score, level)
                                     return
-                                # No respawn, no invulnerability for laser hits
-                                break # Process one laser hit per frame
+                                break 
 
-                # Check for collisions between player's lasers and obstacles
                 for laser in player_lasers[:]:
                     collided = False
                     for rock in rocks[:]:
@@ -1461,13 +1597,14 @@ class Game:
                     for neutral in neutrals[:]:
                         if laser.rect.colliderect(neutral.rect):
                             self.explosion_sound.play()
+                            shake_timer = 20 # Shake on hitting a neutral
                             self.explosions.append(Explosion(neutral.rect.centerx, neutral.rect.centery))
                             player_lasers.remove(laser)
                             neutrals.remove(neutral)
                             self.hurt_sound.play()
                             lives -= 1
                             if lives <= 0:
-                                self.game_over_screen(score)
+                                self.game_over_screen(score, level)
                                 return
                             break
                     if collided: continue
@@ -1478,40 +1615,57 @@ class Game:
                             boss.take_damage(1)
                             if boss.is_destroyed:
                                 self.explosion_sound.play()
-                                # Bigger explosion for the boss
+                                shake_timer = 30 # REDUCED SHAKE (Was 60)
                                 self.explosions.append(Explosion(boss.rect.centerx, boss.rect.centery, num_particles=100))
-                                score += boss.score_value # This will now add 0
+                                score += boss.score_value 
                                 bosses.remove(boss)
                             collided = True
                             break
                         
-                # Check for collisions between player and harvest particles
                 for particle in harvest_particles[:]:
                     if spaceship.check_collision(particle.rect):
                         score += 5
                         harvest_particles.remove(particle)
 
-                # Update the level based on the new incremental score requirement
                 if score >= score_for_next_level:
                     level += 1
+                    level_up_timer = 60 # Reduced from 120 (1 second)
                     self.level_up_sound.play()
                     max_lives += 1
                     lives += 1
                     boss_spawned_this_level = False
-                    # Calculate the score required for the *new* next level
                     score_for_next_level = int(level * (475 + 25 * level))
 
-                # Remove off-screen objects
                 rocks = [rock for rock in rocks if not rock.is_off_screen()]
                 enemies = [enemy for enemy in enemies if not enemy.is_off_screen()]
-                bosses = [boss for boss in bosses if not boss.is_off_screen()] # Remove off-screen boss
+                neutrals = [n for n in neutrals if not n.is_off_screen()] # Added cleanup for neutrals
+                bosses = [boss for boss in bosses if not boss.is_off_screen()] 
                 player_lasers = [laser for laser in player_lasers if not laser.is_off_screen()]
                 enemy_lasers = [laser for laser in enemy_lasers if not laser.is_off_screen()]
 
-            # Draw the lifebar
-            self.draw_lifebar(lives, max_lives)
+            # --- Final Rendering ---
+
+            # Draw Level Up Popup
+            if level_up_timer > 0:
+                level_up_timer -= 1
+                font_scale = 1.0 + 0.1 * math.sin(pygame.time.get_ticks() * 0.02)
+                popup_text = "LEVEL UP!"
+                y_offset = -50 * (1 - (level_up_timer / 60))
+                # Changed from self.menu_font to self.font for a more appealing/thematic look
+                self.draw_text(popup_text, self.font, EXPLOSION_COLORS[0], display_surface, self.SCREEN_WIDTH//2, self.SCREEN_HEIGHT//2 + y_offset)
+
+            # Apply Screen Shake
+            shake_x, shake_y = 0, 0
+            if shake_timer > 0:
+                shake_timer -= 1
+                shake_amount = 10 if shake_timer > 30 else 5
+                shake_x = random.randint(-shake_amount, shake_amount)
+                shake_y = random.randint(-shake_amount, shake_amount)
             
-            # Draw score and level on the left side
+            self.screen.blit(display_surface, (shake_x, shake_y))
+
+            # UI elements drawn on top
+            self.draw_lifebar(lives, max_lives, self.screen)
             self.draw_text(f"Score: {score}", self.score_font, WHITE, self.screen, 15, 60, center=False)
             self.draw_text(f"Level: {level}", self.score_font, WHITE, self.screen, 15, 105, center=False)
 
