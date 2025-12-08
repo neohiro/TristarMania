@@ -508,21 +508,51 @@ class Boss:
         self.x = screen_width / 2
         self.y = -self.size
         self.speed = 0.5 
-        self.max_health = (10 + (level - 4) * 10) * 2 
+        
+        # Calculate Base HP
+        base_hp = (10 + (level - 4) * 10)
+        
+        # Boss Balancing: At Level 8+, two bosses spawn.
+        # Reduce HP multiplier (from 2.0 to 1.2) so they are easier to kill individually.
+        health_multiplier = 1.2 if level >= 8 else 2.0
+        
+        self.max_health = base_hp * health_multiplier
         self.health = self.max_health
+        
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.rect = pygame.Rect(self.x - self.size / 2, self.y - self.size / 2, self.size, self.size)
         self.is_destroyed = False
         self.score_value = 0 
         self.last_shot_time = pygame.time.get_ticks()
+        
+        # AI / Movement Logic Variables
+        self.target_x = self.x
+        self.target_y = self.y
+        self.move_timer = 0 # Time until next behavior switch
 
     def update(self, player_pos):
-        dx = player_pos[0] - self.x
-        dy = player_pos[1] - self.y
+        # AI Logic: Switch behaviors unpredictably
+        self.move_timer -= 1
+        if self.move_timer <= 0:
+            self.move_timer = random.randint(60, 180) # Change behavior every 1-3 seconds
+            
+            # 60% Chance to target the player directly
+            if random.random() < 0.6:
+                self.target_x = player_pos[0]
+                self.target_y = player_pos[1]
+            # 40% Chance to move to a random position in the top half of the screen
+            else:
+                self.target_x = random.randint(self.size, self.screen_width - self.size)
+                self.target_y = random.randint(self.size, self.screen_height // 2)
+
+        # Move towards the current target
+        dx = self.target_x - self.x
+        dy = self.target_y - self.y
         dist = math.hypot(dx, dy)
         
         if dist != 0:
+            # Move towards target
             self.x += self.speed * (dx / dist)
             self.y += self.speed * (dy / dist)
             
@@ -544,7 +574,45 @@ class Boss:
         return new_laser
 
     def draw(self, screen):
-        pygame.draw.rect(screen, ENEMY_COLOR, self.rect)
+        # --- 3D Bevel/Pyramid Effect ---
+        x, y = self.rect.topleft
+        w, h = self.rect.size
+        bevel = 15 # Thickness of the 3D edge
+
+        # Define Colors for shading (based on ENEMY_COLOR which is 255, 50, 50)
+        color_top_light = (255, 120, 120)    # Highlight
+        color_bottom_shadow = (100, 20, 20)  # Shadow
+        color_side_mid = (180, 30, 30)       # Mid-tone for sides
+        
+        # 1. Draw Sides (Trapezoids)
+        # Top Face (Light source usually from top)
+        pygame.draw.polygon(screen, color_top_light, 
+                            [(x, y), (x + w, y), (x + w - bevel, y + bevel), (x + bevel, y + bevel)])
+        # Bottom Face (Shadow)
+        pygame.draw.polygon(screen, color_bottom_shadow, 
+                            [(x, y + h), (x + w, y + h), (x + w - bevel, y + h - bevel), (x + bevel, y + h - bevel)])
+        # Left Face
+        pygame.draw.polygon(screen, color_side_mid, 
+                            [(x, y), (x, y + h), (x + bevel, y + h - bevel), (x + bevel, y + bevel)])
+        # Right Face
+        pygame.draw.polygon(screen, color_side_mid, 
+                            [(x + w, y), (x + w, y + h), (x + w - bevel, y + h - bevel), (x + w - bevel, y + bevel)])
+
+        # 2. Draw Center Face (The flat top of the pyramid)
+        center_rect = pygame.Rect(x + bevel, y + bevel, w - 2 * bevel, h - 2 * bevel)
+        pygame.draw.rect(screen, ENEMY_COLOR, center_rect)
+
+        # 3. Draw "Core" Eye (Pulsating Effect)
+        pulse = math.sin(pygame.time.get_ticks() * 0.005) * 5
+        core_radius = int((w // 6) + pulse)
+        # Ensure radius is positive
+        core_radius = max(5, core_radius)
+        
+        center_x, center_y = self.rect.center
+        # Draw single dark red core
+        pygame.draw.circle(screen, (100, 0, 0), (center_x, center_y), core_radius)
+
+        # --- Health Bar (Existing Logic) ---
         if self.health > 0:
             bg_rect = pygame.Rect(self.rect.left, self.rect.top - 20, self.rect.width, 10)
             pygame.draw.rect(screen, DARK_BLUE, bg_rect)
@@ -638,7 +706,8 @@ class Game:
         self.high_scores = [] 
         self.volume = 0.5
         
-        self.resolutions = [(1280, 720), (1600, 900), (1920, 1080)]
+        # Added 4K Resolution option (3840x2160)
+        self.resolutions = [(1280, 720), (1600, 900), (1920, 1080), (3840, 2160)]
         self.current_resolution_index = 2
         
         self.keybinds = {
@@ -1328,8 +1397,9 @@ class Game:
         frame_counter = 0
         
         level = start_level
-        score = int((start_level - 1) * (450 + 25 * start_level)) if start_level > 1 else 0
-        score_for_next_level = int(level * (475 + 25 * level))
+        score = int((start_level - 1) * (600 + 100 * start_level)) if start_level > 1 else 0
+        # Increased difficulty scaling:
+        score_for_next_level = int(level * (600 + 100 * level))
 
         initial_lives = 4 + (start_level - 1)
         lives = initial_lives
@@ -1428,7 +1498,15 @@ class Game:
                         neutrals.append(NeutralSpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
                 
                 if level >= 4 and not boss_spawned_this_level and not bosses:
-                    bosses.append(Boss(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level))
+                    # Difficulty Spawn: 2 Bosses at Level 8+
+                    num_bosses = 2 if level >= 8 else 1
+                    for _ in range(num_bosses):
+                        new_boss = Boss(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level)
+                        if num_bosses > 1:
+                            # Randomize X so they don't stack perfectly
+                            new_boss.x = random.randint(100, self.SCREEN_WIDTH - 100)
+                            new_boss.rect.centerx = int(new_boss.x)
+                        bosses.append(new_boss)
                     boss_spawned_this_level = True
 
 
@@ -1472,7 +1550,10 @@ class Game:
             if black_hole:
                 black_hole.draw(display_surface)
             
-            spaceship.draw(display_surface)
+            # --- Z-INDEXING CHANGE: Only draw spaceship here if NOT invulnerable ---
+            if not spaceship.invulnerable:
+                spaceship.draw(display_surface)
+
             for rock in rocks:
                 rock.draw(display_surface)
             for enemy in enemies:
@@ -1492,6 +1573,10 @@ class Game:
             for particle in harvest_particles:
                 particle.draw(display_surface)
 
+            # --- Z-INDEXING CHANGE: Draw spaceship here if invulnerable (respawning) to be on top ---
+            if spaceship.invulnerable:
+                spaceship.draw(display_surface)
+
             if not is_paused:
                 # --- Collision Logic & Shake Triggers ---
                 if black_hole:
@@ -1500,7 +1585,9 @@ class Game:
                         for item in collection[:]:
                             if math.hypot(item.x - black_hole.x, item.y - black_hole.y) < black_hole.radius:
                                 self.explosions.append(Explosion(item.x, item.y, num_particles=5))
-                                collection.remove(item)
+                                # SAFE REMOVAL
+                                if item in collection:
+                                    collection.remove(item)
 
                     if not spaceship.invulnerable and math.hypot(spaceship.x - black_hole.x, spaceship.y - black_hole.y) < black_hole.radius:
                         self.hurt_sound.play()
@@ -1521,7 +1608,9 @@ class Game:
                             shake_timer = 20 # Shake on hit
                             self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
                             lives -= 1
-                            rocks.remove(rock)
+                            # SAFE REMOVAL
+                            if rock in rocks:
+                                rocks.remove(rock)
                             player_collided_physically = True
                             break
                     if not player_collided_physically:
@@ -1531,7 +1620,9 @@ class Game:
                                 shake_timer = 20 # Shake on hit
                                 self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
                                 lives -= 1
-                                enemies.remove(enemy)
+                                # SAFE REMOVAL
+                                if enemy in enemies:
+                                    enemies.remove(enemy)
                                 player_collided_physically = True
                                 break
                     if not player_collided_physically:
@@ -1558,12 +1649,33 @@ class Game:
                                 shake_timer = 20
                                 self.explosions.append(Explosion(laser.rect.centerx, laser.rect.centery))
                                 lives -= 1
-                                enemy_lasers.remove(laser)
+                                # SAFE REMOVAL
+                                if laser in enemy_lasers:
+                                    enemy_lasers.remove(laser)
                                 if lives <= 0:
                                     self.game_over_screen(score, level)
                                     return
                                 break 
 
+                # --- Laser vs Laser Collision Check ---
+                for p_laser in player_lasers[:]:
+                    hit_laser = False
+                    for e_laser in enemy_lasers[:]:
+                        if p_laser.rect.colliderect(e_laser.rect):
+                            # Visual spark for the collision
+                            self.explosions.append(Explosion((p_laser.x + e_laser.x)/2, (p_laser.y + e_laser.y)/2, num_particles=10))
+                            # SAFE REMOVAL
+                            if e_laser in enemy_lasers:
+                                enemy_lasers.remove(e_laser)
+                            hit_laser = True
+                            break # p_laser destroyed, stop checking it against other e_lasers
+                    
+                    if hit_laser:
+                        if p_laser in player_lasers:
+                            player_lasers.remove(p_laser)
+                        continue # Skip checking this p_laser against rocks/enemies/bosses
+
+                # --- Player Laser vs Enemies/Rocks/Etc ---
                 for laser in player_lasers[:]:
                     collided = False
                     for rock in rocks[:]:
@@ -1571,8 +1683,13 @@ class Game:
                             self.explosion_sound.play()
                             self.explosions.append(Explosion(rock.rect.centerx, rock.rect.centery))
                             score += rock.score_value
-                            player_lasers.remove(laser)
-                            rocks.remove(rock)
+                            
+                            # SAFE REMOVAL
+                            if laser in player_lasers:
+                                player_lasers.remove(laser)
+                            if rock in rocks:
+                                rocks.remove(rock)
+                                
                             if rock.is_life_rock:
                                 self.harvest_sound.play()
                                 for _ in range(10):
@@ -1588,8 +1705,13 @@ class Game:
                             self.explosion_sound.play()
                             self.explosions.append(Explosion(enemy.rect.centerx, enemy.rect.centery))
                             score += enemy.score_value
-                            player_lasers.remove(laser)
-                            enemies.remove(enemy)
+                            
+                            # SAFE REMOVAL
+                            if laser in player_lasers:
+                                player_lasers.remove(laser)
+                            if enemy in enemies:
+                                enemies.remove(enemy)
+                                
                             collided = True
                             break
                     if collided: continue
@@ -1599,33 +1721,50 @@ class Game:
                             self.explosion_sound.play()
                             shake_timer = 20 # Shake on hitting a neutral
                             self.explosions.append(Explosion(neutral.rect.centerx, neutral.rect.centery))
-                            player_lasers.remove(laser)
-                            neutrals.remove(neutral)
+                            
+                            # SAFE REMOVAL
+                            if laser in player_lasers:
+                                player_lasers.remove(laser)
+                            if neutral in neutrals:    
+                                neutrals.remove(neutral)
+                                
                             self.hurt_sound.play()
                             lives -= 1
                             if lives <= 0:
                                 self.game_over_screen(score, level)
                                 return
+                            collided = True 
                             break
                     if collided: continue
 
                     for boss in bosses[:]:
                         if laser.rect.colliderect(boss.rect):
-                            player_lasers.remove(laser)
+                            # --- IMPACT EFFECT ADDED HERE ---
+                            self.explosions.append(Explosion(laser.x, laser.y, num_particles=15))
+                            
+                            # SAFE REMOVAL of LASER
+                            if laser in player_lasers:
+                                player_lasers.remove(laser)
+                            
                             boss.take_damage(1)
                             if boss.is_destroyed:
                                 self.explosion_sound.play()
                                 shake_timer = 30 # REDUCED SHAKE (Was 60)
                                 self.explosions.append(Explosion(boss.rect.centerx, boss.rect.centery, num_particles=100))
                                 score += boss.score_value 
-                                bosses.remove(boss)
+                                
+                                # SAFE REMOVAL of BOSS
+                                if boss in bosses:
+                                    bosses.remove(boss)
+                                    
                             collided = True
                             break
                         
                 for particle in harvest_particles[:]:
                     if spaceship.check_collision(particle.rect):
                         score += 5
-                        harvest_particles.remove(particle)
+                        if particle in harvest_particles:
+                            harvest_particles.remove(particle)
 
                 if score >= score_for_next_level:
                     level += 1
@@ -1634,7 +1773,8 @@ class Game:
                     max_lives += 1
                     lives += 1
                     boss_spawned_this_level = False
-                    score_for_next_level = int(level * (475 + 25 * level))
+                    # Increased difficulty scaling
+                    score_for_next_level = int(level * (600 + 100 * level))
 
                 rocks = [rock for rock in rocks if not rock.is_off_screen()]
                 enemies = [enemy for enemy in enemies if not enemy.is_off_screen()]
