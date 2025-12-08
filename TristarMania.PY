@@ -1495,7 +1495,10 @@ class Game:
                     elif obstacle_type == "enemy":
                         enemies.append(EnemySpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT, level))
                     elif obstacle_type == "neutral":
-                        neutrals.append(NeutralSpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
+                        # Spawn count increases every 2 levels to prevent overwhelming the screen too fast
+                        spawn_count = 1 + int(level / 2) 
+                        for _ in range(spawn_count):
+                            neutrals.append(NeutralSpaceship(self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
                 
                 if level >= 4 and not boss_spawned_this_level and not bosses:
                     # Difficulty Spawn: 2 Bosses at Level 8+
