@@ -19,7 +19,7 @@ Version 1.2 changelog
 
 # Tristar Mania: Major Update Changelog
 
-This document details the comprehensive changes between the legacy version (`TristarManiaOld.PY`) and the current version (`TristarMania.PY`). This update focuses heavily on visual polish, "juice" (screen shake, particles), and steeper difficulty scaling.
+This document details the comprehensive changes between the legacy version and the current version (`TristarMania.PY`). This update focuses heavily on visual polish, "juice" (screen shake, particles), and steeper difficulty scaling.
 
 ---
 
