@@ -9,6 +9,7 @@ An addictive python game (Linux/Windows)
 - NEBULA = DISTORTION IMMINENT
 
 <img width="1280" height="720" alt="image" src="https://github.com/user-attachments/assets/16f0e312-c22f-4255-a71c-ecb314ac3fd1" />
+<img width="1920" height="1080" alt="screenshot_20251209_182314" src="https://github.com/user-attachments/assets/8e5be373-934f-4a89-acd2-9761ed8ae91d" />
 
 Tips & Tricks:
 
