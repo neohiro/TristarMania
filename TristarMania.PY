@@ -564,15 +564,23 @@ class BlackHole:
         
         self.y = random.randrange(self.radius, self.screen_height - self.radius)
         self.speed = 1.5
+        
+        # Diagonal movement logic
+        self.vx = self.speed * self.direction
+        # Add random vertical movement to make it move diagonally
+        self.vy = random.uniform(-0.5, 0.5) * self.speed
+        
         self.is_active = True
         self.rect = pygame.Rect(self.x - self.radius, self.y - self.radius, self.radius * 2, self.radius * 2)
 
     def update(self):
-        self.x += self.speed * self.direction
+        self.x += self.vx
+        self.y += self.vy
         self.rect.center = (int(self.x), int(self.y))
         
         if (self.direction == 1 and self.x > self.screen_width + self.radius * 2) or \
-           (self.direction == -1 and self.x < -self.radius * 2):
+           (self.direction == -1 and self.x < -self.radius * 2) or \
+           (self.y < -self.radius * 2) or (self.y > self.screen_height + self.radius * 2):
             self.is_active = False
 
     def draw(self, screen):
@@ -741,7 +749,7 @@ class Game:
 
         self.stars = [Star(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(300)]
         self.parallax_stars = [ParallaxStar(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(150)] 
-        self.high_scores = [] 
+        self.high_scores = [] # stores tuples: (name, score, level)
         self.volume = 0.5
         
         self.resolutions = [(1280, 720), (1600, 900), (1920, 1080), (3840, 2160)]
@@ -1213,8 +1221,10 @@ class Game:
                         self.menu_click_sound.play()
                         return 
             self.draw_text("LEADERBOARD", self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 200)
-            for i, score in enumerate(self.high_scores):
-                self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100 + i * 40)
+            for i, entry in enumerate(self.high_scores):
+                # Unpack tuple: name, score, level
+                name, score, level = entry
+                self.draw_text(f"{i + 1}. {name} - {score} (Lvl {level})", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 100 + i * 40)
             _, back_rect = self.draw_and_get_rect("Back", self.menu_font, MENU_TEXT_COLOR, HOVER_TEXT_COLOR, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT - 100)
             pygame.display.flip()
             self.clock.tick(self.FPS)
@@ -1260,11 +1270,65 @@ class Game:
             pygame.display.flip()
             self.clock.tick(self.FPS)
 
+    def enter_name_screen(self, score, level):
+        pygame.mouse.set_visible(True)
+        input_name = ""
+        running = True
+        while running:
+            self.animate_background(self.screen)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_BACKSPACE:
+                        input_name = input_name[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        if len(input_name) > 0:
+                            self.menu_click_sound.play()
+                            # Save score here
+                            self.high_scores.append((input_name, score, level))
+                            # Sort by score (index 1), descending
+                            self.high_scores.sort(key=lambda x: x[1], reverse=True)
+                            self.high_scores = self.high_scores[:5]
+                            self.game_over_screen(score, level)
+                            return
+                    elif event.key == pygame.K_ESCAPE:
+                        # Save with default name if escaped
+                        self.high_scores.append(("Player", score, level))
+                        self.high_scores.sort(key=lambda x: x[1], reverse=True)
+                        self.high_scores = self.high_scores[:5]
+                        self.game_over_screen(score, level)
+                        return
+                    else:
+                        if len(input_name) < 10 and event.unicode.isprintable():
+                            input_name += event.unicode
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                     if len(input_name) > 0:
+                        self.menu_click_sound.play()
+                        self.high_scores.append((input_name, score, level))
+                        self.high_scores.sort(key=lambda x: x[1], reverse=True)
+                        self.high_scores = self.high_scores[:5]
+                        self.game_over_screen(score, level)
+                        return
+
+            self.draw_text("GAME OVER", self.font, ENEMY_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 150)
+            self.draw_text("Enter Your Name:", self.menu_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 50)
+            
+            box_width = 400
+            box_height = 80
+            box_rect = pygame.Rect(self.SCREEN_WIDTH // 2 - box_width // 2, self.SCREEN_HEIGHT // 2 + 50 - box_height // 2, box_width, box_height)
+            pygame.draw.rect(self.screen, SLIDER_BG_COLOR, box_rect)
+            pygame.draw.rect(self.screen, WHITE, box_rect, 2) 
+            
+            self.draw_text(input_name, self.font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 50)
+            self.draw_text("Press Enter to Submit", self.small_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 150)
+            
+            pygame.display.flip()
+            self.clock.tick(self.FPS)
+
     def game_over_screen(self, final_score, final_level):
         pygame.mouse.set_visible(True) 
-        self.high_scores.append(final_score)
-        self.high_scores.sort(reverse=True)
-        self.high_scores = self.high_scores[:5]
         if final_score < 0: final_score = 0
         save_code = self.level_to_code(final_level)
         running = True
@@ -1282,8 +1346,9 @@ class Game:
             self.draw_text(f"Level Reached: {final_level}", self.menu_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 90)
             self.draw_text(f"Level Code: {save_code}", self.menu_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 - 30)
             self.draw_text("LEADERBOARD", self.leaderboard_font, LIGHT_BLUE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 10)
-            for i, score in enumerate(self.high_scores):
-                self.draw_text(f"{i + 1}. {score}", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 60 + i * 40)
+            for i, entry in enumerate(self.high_scores):
+                name, score, level = entry
+                self.draw_text(f"{i + 1}. {name} - {score} (Lvl {level})", self.small_font, WHITE, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 60 + i * 40)
             self.draw_text("Click to return to menu", self.small_font, MENU_TEXT_COLOR, self.screen, self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT - 50)
             pygame.display.flip()
             self.clock.tick(self.FPS)
@@ -1477,7 +1542,7 @@ class Game:
                         self.explosions.append(Explosion(spaceship.rect.centerx, spaceship.rect.centery, num_particles=50))
                         lives -= 1
                         if lives <= 0:
-                            self.game_over_screen(score, level)
+                            self.enter_name_screen(score, level)
                             return
                         else: spaceship.respawn()
                 
@@ -1513,7 +1578,7 @@ class Game:
                                 break 
                     if player_collided_physically:
                         if lives <= 0:
-                            self.game_over_screen(score, level)
+                            self.enter_name_screen(score, level)
                             return
                         else: spaceship.respawn()
                     
@@ -1526,7 +1591,7 @@ class Game:
                                 lives -= 1
                                 if laser in enemy_lasers: enemy_lasers.remove(laser)
                                 if lives <= 0:
-                                    self.game_over_screen(score, level)
+                                    self.enter_name_screen(score, level)
                                     return
                                 break 
 
@@ -1578,7 +1643,7 @@ class Game:
                             self.hurt_sound.play()
                             lives -= 1
                             if lives <= 0:
-                                self.game_over_screen(score, level)
+                                self.enter_name_screen(score, level)
                                 return
                             collided = True 
                             break
