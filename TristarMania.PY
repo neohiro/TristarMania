@@ -3,6 +3,7 @@ import sys
 import random
 import math
 import os
+import time
 from datetime import datetime
 import numpy as np # Import the NumPy library
 
@@ -32,6 +33,17 @@ LASER_COLOR = (0, 255, 255)
 LIFE_COLOR = (255, 50, 50)
 EXPLOSION_COLORS = [(255, 255, 0), (255, 165, 0), (255, 69, 0), (255, 0, 0)]
 FOG_COLOR = (30, 0, 40) # Deep nebula purple
+
+# --- Cyberpunk Head / HUD Colors ---
+CYBER_SKIN_COLOR = (170, 180, 190) # Pale synthetic skin
+CYBER_SKIN_SHADOW = (100, 110, 120)
+CYBER_ACCENT = (0, 255, 255) # Cyan glow
+CYBER_EYE_RED = (255, 30, 30)
+CYBER_METAL = (60, 65, 70)
+CYBER_DARK_METAL = (30, 30, 35)
+HUD_BG_COLOR = (5, 15, 25, 210) # Dark transparent blue
+HUD_BORDER_COLOR = (0, 200, 255)
+HUD_TEXT_COLOR = (180, 255, 230) # Minty bright text
 
 # --- Helper function for sound generation ---
 def sinc(x):
@@ -600,7 +612,7 @@ class BlackHole:
             obj.x += pull_force * (dx / dist)
             obj.y += pull_force * (dy / dist)
 
-# --- Nebula Event Class (Rewritten) ---
+# --- Nebula Event Class ---
 class NebulaEvent:
     def __init__(self, screen_width, screen_height):
         self.screen_width = screen_width
@@ -611,29 +623,22 @@ class NebulaEvent:
         self.active = True
         self.max_fog_alpha = 250
         
-        # 1. Generate Static Varied Fog Texture
         self.fog_texture = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        # Base fill - SIGNIFICANTLY increased alpha to make it "thick"
         self.fog_texture.fill((*FOG_COLOR, 245)) 
         
-        # Add random "thick" soft cloud patches for uneven density
-        cloud_brush = self._generate_gradient_brush(300, (30, 0, 40), 100) # Dark purple, low alpha
+        cloud_brush = self._generate_gradient_brush(300, (30, 0, 40), 100) 
         for _ in range(25):
             x = random.randint(-100, self.screen_width)
             y = random.randint(-100, self.screen_height)
             self.fog_texture.blit(cloud_brush, (x, y))
 
-        # 2. Flashlight Shape Generation Setup
         self.visibility_radius = 280 
         self.light_mask = pygame.Surface((self.visibility_radius * 2, self.visibility_radius * 2), pygame.SRCALPHA)
         
-        # Pre-generate brushes for the dynamic mask
         self.main_brush = self._generate_gradient_brush(int(self.visibility_radius * 0.7), (0,0,0), 255)
         self.edge_brush_large = self._generate_gradient_brush(100, (0,0,0), 180)
         self.edge_brush_small = self._generate_gradient_brush(60, (0,0,0), 120)
 
-        # Store "blobs" data for the dynamic shape animation
-        # Format: [angle, distance, rotation_speed, phase_offset]
         self.blobs = []
         for _ in range(20):
             angle = random.uniform(0, 2 * math.pi)
@@ -656,7 +661,6 @@ class NebulaEvent:
             self.active = False
 
     def draw(self, screen, player_pos):
-        # Calculate Fade
         time_elapsed = self.total_duration - self.duration
         fade_factor = 1.0
         
@@ -667,49 +671,36 @@ class NebulaEvent:
             
         if fade_factor <= 0: return
 
-        # Prepare layer
         fog_layer = self.fog_texture.copy()
         
-        # Apply Fade to whole layer (Global Alpha)
         if fade_factor < 1.0:
             fade_surf = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
             fade_surf.fill((0, 0, 0, int(255 * (1-fade_factor)))) 
             fog_layer.blit(fade_surf, (0,0), special_flags=pygame.BLEND_RGBA_SUB)
 
-        # --- Dynamic Shape Logic ---
-        # Clear the mask
         self.light_mask.fill((0,0,0,0))
         cw, ch = self.visibility_radius, self.visibility_radius
 
-        # Blit main center hole
         self.light_mask.blit(self.main_brush, (cw - self.main_brush.get_width()//2, ch - self.main_brush.get_height()//2))
 
-        # Animate edge blobs to simulate shifting nebula gas
         time_val = pygame.time.get_ticks() * 0.005
         
         for i, blob in enumerate(self.blobs):
-            # Rotate blob slightly
             blob[0] += blob[2] 
-            
-            # Wobble the distance using sine wave for organic "breathing" effect
             wobble = math.sin(time_val + blob[3]) * 20
-            
             bx = cw + math.cos(blob[0]) * (blob[1] + wobble)
             by = ch + math.sin(blob[0]) * (blob[1] + wobble)
             
-            # Draw blobs
             if i % 2 == 0:
                 self.light_mask.blit(self.edge_brush_large, (int(bx) - 50, int(by) - 50))
             else:
                 self.light_mask.blit(self.edge_brush_small, (int(bx) - 30, int(by) - 30))
 
-        # Cut the hole using BLEND_RGBA_SUB
         dest_x = player_pos[0] - self.visibility_radius
         dest_y = player_pos[1] - self.visibility_radius
         
         fog_layer.blit(self.light_mask, (dest_x, dest_y), special_flags=pygame.BLEND_RGBA_SUB)
         
-        # Draw Radar Interference (Enhanced)
         for _ in range(5):
             line_y = random.randint(0, self.screen_height)
             line_h = random.randint(1, 4)
@@ -746,6 +737,7 @@ class Game:
         self.score_font = pygame.font.Font(None, 50)
         self.life_font = pygame.font.Font(None, 50)
         self.leaderboard_font = pygame.font.Font(None, 45)
+        self.speech_font = pygame.font.Font(None, 36)
 
         self.stars = [Star(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(300)]
         self.parallax_stars = [ParallaxStar(self.SCREEN_WIDTH, self.SCREEN_HEIGHT) for _ in range(150)] 
@@ -766,6 +758,12 @@ class Game:
         
         self.explosions = []
         self.music_is_playing = False 
+        
+        # Variables for the head animation
+        self.head_blink_timer = 0
+        self.head_blink_duration = 0.12 
+        self.head_next_blink = time.time() + random.uniform(3, 8)
+        self.head_is_blinking = False
 
         # --- Sound Effects ---
         laser_sound_list = [int(20000 * sinc(2 * math.pi * 440 * i / SAMPLE_RATE)) for i in range(SAMPLE_RATE // 10)]
@@ -928,6 +926,216 @@ class Game:
                     elif item == "Exit to Menu": exit_game = True
             self.screen.blit(text_surface, text_rect)
         return resume_game, load_game, exit_game, save_game
+    
+    # --- Cyberpunk Head Logic ---
+    def draw_head(self, surface, center_x, center_y, mouse_pos, talking_active):
+        """Draws a cybernetic/scifi head with a visor and implants."""
+        current_time = time.time()
+
+        # 1. Neck (Mechanical/Cables)
+        pygame.draw.rect(surface, CYBER_DARK_METAL, (center_x - 30, center_y + 100, 60, 120))
+        # Draw some cable lines on the neck
+        for i in range(3):
+            lx = center_x - 15 + i*15
+            pygame.draw.line(surface, CYBER_METAL, (lx, center_y+100), (lx, center_y+160), 4)
+
+        # 2. Face Shape (Base - Pale/Metallic)
+        face_rect = pygame.Rect(center_x - 105, center_y - 130, 210, 280)
+        pygame.draw.ellipse(surface, CYBER_SKIN_SHADOW, face_rect.inflate(4,4))
+        pygame.draw.ellipse(surface, CYBER_SKIN_COLOR, face_rect)
+
+        # 3. Headset / Cybernetic Ears
+        pygame.draw.rect(surface, CYBER_DARK_METAL, (center_x - 130, center_y - 40, 40, 80), border_radius=10) # Left
+        pygame.draw.rect(surface, CYBER_DARK_METAL, (center_x + 90, center_y - 40, 40, 80), border_radius=10)  # Right
+        # Antenna
+        pygame.draw.line(surface, CYBER_METAL, (center_x + 110, center_y - 40), (center_x + 110, center_y - 100), 2)
+        if int(current_time * 2) % 2 == 0: # Blink light on antenna
+            pygame.draw.circle(surface, CYBER_ACCENT, (center_x + 110, center_y - 100), 3)
+
+        # 4. Tech Helmet / Hair
+        pygame.draw.ellipse(surface, CYBER_DARK_METAL, (center_x - 110, center_y - 150, 220, 160)) 
+        # Redraw Face lower half to keep jaw shape
+        pygame.draw.arc(surface, CYBER_SKIN_COLOR, face_rect, math.pi, 2*math.pi, 100)
+        # Helmet visor rim
+        pygame.draw.arc(surface, CYBER_METAL, (center_x - 105, center_y - 150, 210, 150), 0, math.pi, 10)
+
+        # 5. Eyes and Implants calculation
+        # Handle Blinking logic
+        if not self.head_is_blinking and current_time > self.head_next_blink:
+            self.head_is_blinking = True
+            self.head_next_blink = current_time + self.head_blink_duration
+        elif self.head_is_blinking and current_time > self.head_next_blink:
+            self.head_is_blinking = False
+            self.head_next_blink = current_time + random.uniform(3, 8)
+
+        eye_y = center_y - 30
+        left_eye_x = center_x - 50
+        right_eye_x = center_x + 50
+        eye_radius = 18 
+        
+        # Calculate Pupil Look Direction
+        mx, my = mouse_pos
+        dx = (mx - center_x) / (self.SCREEN_WIDTH / 2) * 5
+        dy = (my - center_y) / (self.SCREEN_HEIGHT / 2) * 5
+        dx = max(-5, min(5, dx))
+        dy = max(-5, min(5, dy))
+
+        # --- RIGHT EYE: NORMAL CYBERNETIC (Blue) ---
+        if self.head_is_blinking:
+             pygame.draw.line(surface, CYBER_SKIN_SHADOW, (right_eye_x - 20, eye_y), (right_eye_x + 20, eye_y), 4)
+        else:
+            pygame.draw.circle(surface, (200, 220, 230), (right_eye_x, eye_y), eye_radius)
+            pygame.draw.circle(surface, CYBER_ACCENT, (right_eye_x + int(dx), eye_y + int(dy)), 7)
+            
+        # --- LEFT EYE: TACTICAL VISOR / IMPLANT (Red) ---
+        # Draw a metal housing around the left eye area
+        pygame.draw.rect(surface, CYBER_METAL, (left_eye_x - 25, eye_y - 20, 50, 40), border_radius=5)
+        # Glowing Red Lens
+        pygame.draw.circle(surface, CYBER_EYE_RED, (left_eye_x, eye_y), 12)
+        # Lens Reflection
+        pygame.draw.circle(surface, (255, 150, 150), (left_eye_x - 4, eye_y - 4), 3)
+        # Scanning Line in Visor
+        scan_y = eye_y - 10 + (int(current_time * 20) % 20)
+        pygame.draw.line(surface, (255, 100, 100), (left_eye_x - 10, scan_y), (left_eye_x + 10, scan_y), 1)
+
+        # 6. Face Details / Lines
+        # Circuit lines on cheeks
+        pygame.draw.line(surface, CYBER_SKIN_SHADOW, (center_x + 60, center_y + 30), (center_x + 90, center_y + 20), 2)
+        pygame.draw.line(surface, CYBER_SKIN_SHADOW, (center_x + 60, center_y + 40), (center_x + 85, center_y + 35), 2)
+        
+        # 7. Mouth (Robotic/Stern)
+        if talking_active:
+             mouth_open_amount = (math.sin(current_time * 15) + 1) * 2
+        else:
+             mouth_open_amount = 0
+             
+        mouth_y = center_y + 65
+        pygame.draw.rect(surface, (50, 40, 40), (center_x - 20, mouth_y, 40, 4 + mouth_open_amount))
+        # Jaw lines vertical
+        pygame.draw.line(surface, CYBER_SKIN_SHADOW, (center_x - 20, mouth_y + 15), (center_x - 20, mouth_y + 40), 2)
+        pygame.draw.line(surface, CYBER_SKIN_SHADOW, (center_x + 20, mouth_y + 15), (center_x + 20, mouth_y + 40), 2)
+
+
+    def wrap_text(self, text, font, max_width):
+        words = text.split(' ')
+        lines = []
+        current_line = []
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            w, _ = font.size(test_line)
+            if w < max_width:
+                current_line.append(word)
+            else:
+                lines.append(' '.join(current_line))
+                current_line = [word]
+        lines.append(' '.join(current_line))
+        return lines
+
+    def briefing_screen(self):
+        full_text = "Welcome, pilot. You are assigned to protect this sector. Avoid hitting any green tristars travelling in your sector, traffic is going to increase rapidly. If you need to power up, find some asteroids nearby & shoot them. Good luck!"
+        
+        # HUD Layout
+        bubble_w = 700
+        bubble_h = 350
+        bubble_x = self.SCREEN_WIDTH // 2 - bubble_w // 2 + 100
+        bubble_y = self.SCREEN_HEIGHT // 2 - 200
+        
+        head_x = 300
+        head_y = self.SCREEN_HEIGHT - 300
+        
+        text_char_index = 0
+        last_char_time = pygame.time.get_ticks()
+        char_delay = 40 # ms per char
+        
+        running = True
+        skip_text = False
+        
+        # Create a transparent surface for the HUD
+        hud_surface = pygame.Surface((self.SCREEN_WIDTH, self.SCREEN_HEIGHT), pygame.SRCALPHA)
+
+        while running:
+            current_time = pygame.time.get_ticks()
+            mouse_pos = pygame.mouse.get_pos()
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
+                    if text_char_index < len(full_text):
+                        text_char_index = len(full_text)
+                        skip_text = True
+                    else:
+                        running = False
+            
+            # Update Text typewriter effect
+            if not skip_text and text_char_index < len(full_text):
+                if current_time - last_char_time > char_delay:
+                    text_char_index += 1
+                    last_char_time = current_time
+            
+            self.animate_background(self.screen)
+            
+            # --- Draw HUD Panel ---
+            hud_surface.fill((0,0,0,0)) # Clear
+            
+            # Main HUD Background (Organic/Tech shape)
+            hud_rect = pygame.Rect(bubble_x, bubble_y, bubble_w, bubble_h)
+            pygame.draw.rect(hud_surface, HUD_BG_COLOR, hud_rect, border_radius=15)
+            
+            # Tech Borders (Corners only)
+            corner_len = 30
+            # Top Left
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x, bubble_y), (bubble_x + corner_len, bubble_y), 3)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x, bubble_y), (bubble_x, bubble_y + corner_len), 3)
+            # Top Right
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x + bubble_w, bubble_y), (bubble_x + bubble_w - corner_len, bubble_y), 3)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x + bubble_w, bubble_y), (bubble_x + bubble_w, bubble_y + corner_len), 3)
+            # Bottom Left
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x, bubble_y + bubble_h), (bubble_x + corner_len, bubble_y + bubble_h), 3)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x, bubble_y + bubble_h), (bubble_x, bubble_y + bubble_h - corner_len), 3)
+            # Bottom Right
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x + bubble_w, bubble_y + bubble_h), (bubble_x + bubble_w - corner_len, bubble_y + bubble_h), 3)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, (bubble_x + bubble_w, bubble_y + bubble_h), (bubble_x + bubble_w, bubble_y + bubble_h - corner_len), 3)
+            
+            # Scanlines
+            for y in range(bubble_y, bubble_y + bubble_h, 4):
+                pygame.draw.line(hud_surface, (0, 200, 255, 20), (bubble_x, y), (bubble_x + bubble_w, y), 1)
+            
+            # Connection Line (Transmission signal)
+            start_pos = (head_x + 50, head_y - 120)
+            mid_pos = (bubble_x - 30, bubble_y + bubble_h // 2)
+            end_pos = (bubble_x, bubble_y + bubble_h // 2)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, start_pos, mid_pos, 2)
+            pygame.draw.line(hud_surface, HUD_BORDER_COLOR, mid_pos, end_pos, 2)
+            pygame.draw.circle(hud_surface, HUD_BORDER_COLOR, start_pos, 4)
+            
+            # Blit HUD surface
+            self.screen.blit(hud_surface, (0,0))
+
+            # Draw Head
+            is_talking = text_char_index < len(full_text)
+            self.draw_head(self.screen, head_x, head_y, mouse_pos, is_talking)
+            
+            # Render Text
+            current_visible_text = full_text[:text_char_index]
+            lines = self.wrap_text(current_visible_text, self.speech_font, bubble_w - 60)
+            
+            for i, line in enumerate(lines):
+                text_surf = self.speech_font.render(line, True, HUD_TEXT_COLOR)
+                # Add a slight shadow/glow to text
+                shadow_surf = self.speech_font.render(line, True, (0, 50, 50))
+                self.screen.blit(shadow_surf, (bubble_x + 32, bubble_y + 32 + i * 40))
+                self.screen.blit(text_surf, (bubble_x + 30, bubble_y + 30 + i * 40))
+            
+            # Draw "Click to continue" prompt if finished
+            if text_char_index >= len(full_text):
+                 if (current_time // 500) % 2 == 0:
+                     prompt_surf = self.small_font.render("Click to continue...", True, CYBER_ACCENT)
+                     self.screen.blit(prompt_surf, (bubble_x + bubble_w - 280, bubble_y + bubble_h - 40))
+
+            pygame.display.flip()
+            self.clock.tick(self.FPS)
 
     def title_screen(self):
         title_text = "Tristar Mania"
@@ -1720,4 +1928,5 @@ class Game:
 if __name__ == "__main__":
     game = Game()
     game.title_screen()
+    game.briefing_screen()
     game.main_menu()
