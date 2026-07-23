@@ -115,3 +115,8 @@ The difficulty curve has been steepened significantly.
 | **Max Res** | 1080p | 4K (2160p) |
 | **Screenshots** | None | F12 / PrintScreen |
 | **Render Method** | Direct to Screen | Intermediate Surface (for shake) |
+
+## 📦 Installation
+
+You can download the compiled standalone release for your operating system (Windows, macOS, or Linux) directly from the **[Releases](../../releases)** tab. No Python installation is required! Just download the .zip for your OS, extract, and run.
+
